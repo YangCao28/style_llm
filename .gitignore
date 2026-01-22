@@ -1,0 +1,8 @@
+__pycache__/
+*.pyc
+.conda/
+.vscode/
+new/
+*.jsonl
+data_prep/*.jsonl
+data_prep/*.json
