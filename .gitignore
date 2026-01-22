@@ -3,6 +3,19 @@ __pycache__/
 .conda/
 .vscode/
 new/
+# Ignore all jsonl by default
 *.jsonl
+data/*.jsonl
 data_prep/*.jsonl
+
+# Allow specific data files in data/ as requested
+!data/wuxia_chunks.jsonl
+!data/wuxia_chunks_cleaned.jsonl
+!data/wuxia_vernacular_pairs.jsonl
+
+# Ignore generic json in data but allow config and comparison
+data/*.json
 data_prep/*.json
+!data_prep/llm_config.json
+!data/comparison_dataset.json
+
