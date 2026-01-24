@@ -66,9 +66,9 @@ def main():
     args = parser.parse_args()
 
     # Paths
-    config_path = 'llm_config.json'
-    input_file = Path('data_prep/wuxia_chunks_cleaned.jsonl')
-    output_file = Path('data_prep/wuxia_vernacular_pairs.jsonl')
+    config_path = 'data_prep/llm_config.json'
+    input_file = Path('data/wuxia_chunks_cleaned.jsonl')
+    output_file = Path('data/wuxia_vernacular_pairs.jsonl')
     
     # Initialize Agent
     if not Path(config_path).exists():
@@ -104,6 +104,11 @@ def main():
                 continue
                 
             record = json.loads(line)
+            
+            # Filter out Gu Long (already processed or not desired)
+            if record.get('author') == 'Gu':
+                continue
+
             chunk_id = record['id']
             
             if chunk_id in processed_ids:
