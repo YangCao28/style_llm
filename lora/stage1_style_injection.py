@@ -30,7 +30,7 @@ from typing import Dict, Iterable, List
 from datasets import Dataset, load_dataset
 from peft import LoraConfig
 from transformers import AutoModelForCausalLM, AutoTokenizer, TrainingArguments
-from trl import DataCollatorForCompletionOnlyLM, SFTTrainer
+from trl import SFTConfig, SFTTrainer
 
 DEFAULT_MODEL = "Qwen/Qwen3-8B-Base"
 RESPONSE_TEMPLATE = "### 正文\n"
@@ -218,12 +218,6 @@ def build_trainer(
         task_type="CAUSAL_LM",
     )
 
-    collator = DataCollatorForCompletionOnlyLM(
-        response_template=RESPONSE_TEMPLATE,
-        tokenizer=tokenizer,
-        mlm=False,
-    )
-
     training_args = TrainingArguments(
         output_dir=str(output_dir),
         per_device_train_batch_size=per_device_train_batch_size,
@@ -245,6 +239,13 @@ def build_trainer(
         ddp_find_unused_parameters=False,
     )
 
+    sft_config = SFTConfig(
+        dataset_text_field=None,
+        max_seq_length=max_seq_length,
+        packing=True,
+        response_template=RESPONSE_TEMPLATE,
+    )
+
     trainer = SFTTrainer(
         model=model,
         args=training_args,
@@ -252,9 +253,7 @@ def build_trainer(
         dataset_text_field=None,
         formatting_func=formatting_func,
         tokenizer=tokenizer,
-        max_seq_length=max_seq_length,
-        data_collator=collator,
-        packing=True,
+        sft_config=sft_config,
         peft_config=lora_config,
     )
     return trainer
