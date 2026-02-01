@@ -182,6 +182,13 @@ def main() -> None:
         streaming=args.streaming,
     )
     
+    # 统计数据集大小
+    if not args.streaming:
+        dataset_size = len(dataset)
+        print(f"✓ 数据集加载完成：共 {dataset_size:,} 条训练样本")
+    else:
+        print(f"✓ 数据集加载完成：流式模式（无法提前统计总数）")
+    
     # 2. 加载tokenizer
     print(f"Loading tokenizer from {args.model_name_or_path}")
     tokenizer = AutoTokenizer.from_pretrained(args.model_name_or_path, use_fast=True)
@@ -221,7 +228,14 @@ def main() -> None:
             truncation=True,
             max_length=args.max_seq_length,
             padding=False,
-            add_special_tokens=False,  # 我们在formatting_func中已经处理了格式
+     
+    
+    # 打印tokenize后的统计信息
+    if not args.streaming:
+        print(f"✓ Tokenization完成：{len(tokenized_dataset):,} 条样本已转换为token ids")
+        print(f"  预计训练步数：{len(tokenized_dataset) // (args.per_device_train_batch_size * args.gradient_accumulation_steps)} steps")
+    else:
+        print(f"✓ Tokenization完成（流式模式）")       add_special_tokens=False,  # 我们在formatting_func中已经处理了格式
         )
     
     tokenized_dataset = dataset.map(
@@ -260,7 +274,14 @@ def main() -> None:
     
     # 8. 创建Trainer
     trainer = Trainer(
-        model=model,
+        mod\n" + "="*60)
+    print(f"开始训练 Stage-1 风格注入")
+    print(f"  数据集：{len(tokenized_dataset):,} 条样本")
+    print(f"  Batch size：{args.per_device_train_batch_size} × {args.gradient_accumulation_steps} = {args.per_device_train_batch_size * args.gradient_accumulation_steps}")
+    print(f"  学习率：{args.learning_rate}")
+    print(f"  训练轮数：{args.num_train_epochs}")
+    print(f"  预计步数：~{len(tokenized_dataset) // (args.per_device_train_batch_size * args.gradient_accumulation_steps)} steps")
+    print("="*60 + "\n
         args=training_args,
         train_dataset=tokenized_dataset,
         data_collator=data_collator,
