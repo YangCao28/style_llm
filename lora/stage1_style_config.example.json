@@ -1,6 +1,6 @@
 {
   "model_name_or_path": "Qwen/Qwen3-8B-Base",
-  "dataset_path": "data/dataset/combined_dataset.jsonl",
+  "dataset_path": "data/dataset/combined_dataset_uniform.jsonl",
   "output_dir": "./stage1_style_injection",
   "per_device_train_batch_size": 8,
   "gradient_accumulation_steps": 16,

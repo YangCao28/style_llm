@@ -23,8 +23,14 @@ This folder contains the Stage-1 (unsupervised style injection) training stack f
   ```
 
 ## Data expectations
-- Input file: `data/dataset/combined_dataset.jsonl` with packed 1024-token segments already cleaned, simplified, and free of metadata.
-- Each JSON record must contain at least a `text` field. The script applies a final regex sweep to drop any residual `作者：` lines, chapter headers, or `http://` noise before training.
+- Normalize the combined corpus first to ensure every record exposes the same columns (including `author`, `merged_from`, `merged_count`):
+  ```bash
+  python -m lora.dataset_wrapper \
+    --input data/dataset/combined_dataset.jsonl \
+    --output data/dataset/combined_dataset_uniform.jsonl
+  ```
+- The training script consumes `data/dataset/combined_dataset_uniform.jsonl`, which already contains packed 1024-token segments cleaned、简体化且无元数据。
+- Each JSON record must contain at least a `text` field. The trainer会在开跑前再次 regex 清洗 `作者：`/章节序号/链接等噪声。
 
 ## Training command (single 80GB A100)
 ```bash
