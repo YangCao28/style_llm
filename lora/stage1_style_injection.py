@@ -246,9 +246,9 @@ def build_trainer(
         model=model,
         args=sft_config,
         train_dataset=dataset,
+        processing_class=tokenizer,
         dataset_text_field=None,
         formatting_func=formatting_func,
-        tokenizer=tokenizer,
         peft_config=lora_config,
     )
     return trainer
