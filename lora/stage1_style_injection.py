@@ -190,24 +190,26 @@ def main() -> None:
         print(f"✓ 数据集加载完成：流式模式（无法提前统计总数）")
     
     # 2. 加载tokenizer
-    print(f"Loading tokenizer from {args.model_name_or_path}")
+    print(f"\nLoading tokenizer from {args.model_name_or_path}")
     tokenizer = AutoTokenizer.from_pretrained(args.model_name_or_path, use_fast=True)
     tokenizer.padding_side = "right"
     tokenizer.model_max_length = args.max_seq_length
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
+    print(f"✓ Tokenizer加载完成")
     
     # 3. 加载模型
-    print(f"Loading model from {args.model_name_or_path}")
+    print(f"\nLoading model from {args.model_name_or_path}")
     model = AutoModelForCausalLM.from_pretrained(
         args.model_name_or_path,
         torch_dtype="auto",
         device_map="auto",
         attn_implementation=args.attn_impl,
     )
+    print(f"✓ 模型加载完成")
     
     # 4. 应用LoRA
-    print("Applying LoRA configuration")
+    print("\nApplying LoRA configuration")
     lora_config = LoraConfig(
         r=128,
         lora_alpha=256,
@@ -220,7 +222,7 @@ def main() -> None:
     model.print_trainable_parameters()
     
     # 5. Tokenize数据集（不padding，保持原始长度）
-    print("Tokenizing dataset")
+    print("\nTokenizing dataset...")
     def tokenize_function(examples):
         texts = [formatting_func({"text": text}) for text in examples["text"]]
         return tokenizer(
@@ -228,14 +230,7 @@ def main() -> None:
             truncation=True,
             max_length=args.max_seq_length,
             padding=False,
-     
-    
-    # 打印tokenize后的统计信息
-    if not args.streaming:
-        print(f"✓ Tokenization完成：{len(tokenized_dataset):,} 条样本已转换为token ids")
-        print(f"  预计训练步数：{len(tokenized_dataset) // (args.per_device_train_batch_size * args.gradient_accumulation_steps)} steps")
-    else:
-        print(f"✓ Tokenization完成（流式模式）")       add_special_tokens=False,  # 我们在formatting_func中已经处理了格式
+            add_special_tokens=False,  # 我们在formatting_func中已经处理了格式
         )
     
     tokenized_dataset = dataset.map(
@@ -243,6 +238,14 @@ def main() -> None:
         batched=True,
         remove_columns=dataset.column_names,
     )
+    
+    # 打印tokenize后的统计信息
+    if not args.streaming:
+        print(f"✓ Tokenization完成：{len(tokenized_dataset):,} 条样本已转换为token ids")
+        estimated_steps = len(tokenized_dataset) // (args.per_device_train_batch_size * args.gradient_accumulation_steps)
+        print(f"  预计训练步数：{estimated_steps} steps")
+    else:
+        print(f"✓ Tokenization完成（流式模式）")
     
     # 6. 创建packing collator
     data_collator = PackingDataCollator(
@@ -274,28 +277,36 @@ def main() -> None:
     
     # 8. 创建Trainer
     trainer = Trainer(
-        mod\n" + "="*60)
-    print(f"开始训练 Stage-1 风格注入")
-    print(f"  数据集：{len(tokenized_dataset):,} 条样本")
-    print(f"  Batch size：{args.per_device_train_batch_size} × {args.gradient_accumulation_steps} = {args.per_device_train_batch_size * args.gradient_accumulation_steps}")
-    print(f"  学习率：{args.learning_rate}")
-    print(f"  训练轮数：{args.num_train_epochs}")
-    print(f"  预计步数：~{len(tokenized_dataset) // (args.per_device_train_batch_size * args.gradient_accumulation_steps)} steps")
-    print("="*60 + "\n
+        model=model,
         args=training_args,
         train_dataset=tokenized_dataset,
         data_collator=data_collator,
     )
     
     # 9. 开始训练
-    print("Starting training")
+    if not args.streaming:
+        effective_batch = args.per_device_train_batch_size * args.gradient_accumulation_steps
+        print("\n" + "="*70)
+        print(f"开始训练 Stage-1 风格注入")
+        print(f"  训练数据：{len(tokenized_dataset):,} 条样本")
+        print(f"  Batch size：{args.per_device_train_batch_size} × {args.gradient_accumulation_steps} = {effective_batch}")
+        print(f"  学习率：{args.learning_rate}")
+        print(f"  训练轮数：{args.num_train_epochs}")
+        print(f"  预计步数：~{len(tokenized_dataset) // effective_batch} steps")
+        print(f"  保存间隔：每 {args.save_steps} steps")
+        print("="*70 + "\n")
+    else:
+        print("\n" + "="*70)
+        print(f"开始训练 Stage-1 风格注入（流式模式）")
+        print("="*70 + "\n")
+    
     trainer.train()
     
     # 10. 保存模型和tokenizer
-    print(f"Saving model to {args.output_dir}")
+    print(f"\n保存模型到 {args.output_dir}")
     trainer.save_model()
     tokenizer.save_pretrained(args.output_dir)
-    print("Training complete!")
+    print("✓ 训练完成!")
 
 
 if __name__ == "__main__":
