@@ -243,7 +243,6 @@ def build_trainer(
         report_to=("tensorboard",),
         dataloader_drop_last=True,
         ddp_find_unused_parameters=False,
-        attn_implementation=attn_impl,
     )
 
     trainer = SFTTrainer(
