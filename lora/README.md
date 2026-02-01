@@ -2,6 +2,26 @@
 
 This folder contains the Stage-1 (unsupervised style injection) training stack for the 45k × 1024-token corpus.
 
+## Environment setup
+1. Create/activate the project environment (example):
+  ```bash
+  conda create -p ./.conda python=3.10 -y
+  conda activate ./\.conda
+  ```
+2. Install all core dependencies in one shot using the provided requirement list:
+  ```bash
+  conda install -p ./.conda --file lora/conda-requirements.txt \
+    -c pytorch -c nvidia -c conda-forge
+  ```
+3. FlashAttention-2 is not on conda; install it via pip (needs CUDA 12 toolchain):
+  ```bash
+  pip install flash-attn --no-build-isolation
+  ```
+4. (Optional) Login to Hugging Face if the base model is gated:
+  ```bash
+  huggingface-cli login
+  ```
+
 ## Data expectations
 - Input file: `data/dataset/combined_dataset.jsonl` with packed 1024-token segments already cleaned, simplified, and free of metadata.
 - Each JSON record must contain at least a `text` field. The script applies a final regex sweep to drop any residual `作者：` lines, chapter headers, or `http://` noise before training.
