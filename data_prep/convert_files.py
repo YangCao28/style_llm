@@ -16,6 +16,12 @@ def get_author_english_name(path_part):
             return value
     return None
 
+def get_author_english_name(path_part):
+    for key, value in AUTHOR_MAPPING.items():
+        if key in path_part:
+            return value
+    return None
+
 def try_read_file(file_path):
     encodings = ['utf-8', 'gb18030', 'gbk', 'big5', 'utf-16']
     for enc in encodings:
