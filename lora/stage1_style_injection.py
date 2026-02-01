@@ -30,7 +30,7 @@ from typing import Dict, Iterable, List
 from datasets import Dataset, load_dataset
 from peft import LoraConfig
 from transformers import AutoModelForCausalLM, AutoTokenizer
-from trl import DataCollatorForCompletionOnlyLM, SFTConfig, SFTTrainer
+from trl import SFTConfig, SFTTrainer
 
 DEFAULT_MODEL = "Qwen/Qwen3-8B-Base"
 RESPONSE_TEMPLATE = "### 正文\n"
@@ -242,12 +242,6 @@ def build_trainer(
         packing=True,
     )
 
-    data_collator = DataCollatorForCompletionOnlyLM(
-        response_template=RESPONSE_TEMPLATE,
-        instruction_template=f"{PROMPT_TEMPLATE}{MERGED_TOKEN_STATEMENT}",
-        tokenizer=tokenizer,
-    )
-
     trainer = SFTTrainer(
         model=model,
         args=sft_config,
@@ -255,7 +249,6 @@ def build_trainer(
         dataset_text_field=None,
         formatting_func=formatting_func,
         tokenizer=tokenizer,
-        data_collator=data_collator,
         peft_config=lora_config,
     )
     return trainer
