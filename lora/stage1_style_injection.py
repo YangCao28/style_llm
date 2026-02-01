@@ -52,7 +52,10 @@ def parse_args() -> argparse.Namespace:
     config_parser.add_argument("--config", type=Path, help="Path to JSON config file.")
     config_args, remaining_argv = config_parser.parse_known_args()
 
-    parser = argparse.ArgumentParser(description="Stage-1 LoRA style injection training", parents=[config_parser])
+    parser = argparse.ArgumentParser(
+        description="Stage-1 LoRA style injection training",
+        parents=[config_parser],
+    )
     parser.add_argument("--model_name_or_path", default=DEFAULT_MODEL)
     parser.add_argument(
         "--dataset_path",
@@ -66,86 +69,72 @@ def parse_args() -> argparse.Namespace:
         default=Path("./stage1_style_injection"),
         help="Directory for checkpoints and logs.",
     )
+    parser.add_argument("--logging_steps", type=int, default=10, help="Trainer logging interval.")
+    parser.add_argument("--save_steps", type=int, default=500, help="Checkpoint interval for QA sampling.")
+    parser.add_argument("--streaming", action="store_true", help="Use datasets streaming mode.")
     parser.add_argument(
-        "--logging_steps",
-        parser.add_argument(
-            "--attn_impl",
-            type=str,
-            default="flash_attention_2",
-            help="Attention implementation passed to HF model (default: flash_attention_2)",
-        )
-
-        if config_args.config:
-            if not config_args.config.exists():
-                raise FileNotFoundError(config_args.config)
-            with config_args.config.open("r", encoding="utf-8") as handle:
-                config_data = json.load(handle)
-            normalized_defaults = {}
-            for key, raw_value in config_data.items():
-                matched_action = next((action for action in parser._actions if action.dest == key), None)
-                if matched_action is None:
-                    raise ValueError(f"Unknown config key '{key}' in {config_args.config}")
-                converter = matched_action.type
-                if converter and raw_value is not None and not isinstance(raw_value, converter):
-                    normalized_defaults[key] = converter(raw_value)
-                else:
-                    normalized_defaults[key] = raw_value
-            parser.set_defaults(**normalized_defaults)
-
-        args = parser.parse_args(remaining_argv)
-        args.config = config_args.config or args.config
-        return args
+        "--per_device_train_batch_size",
+        type=int,
+        default=8,
+        help="Per-device micro batch size (default: 8).",
+    )
+    parser.add_argument(
+        "--gradient_accumulation_steps",
+        type=int,
+        default=16,
+        help="Gradient accumulation steps to reach global batch 128 (default: 16).",
+    )
+    parser.add_argument(
+        "--learning_rate",
+        type=float,
+        default=5e-5,
+        help="Peak learning rate for cosine schedule (default: 5e-5).",
+    )
+    parser.add_argument(
+        "--warmup_ratio",
+        type=float,
+        default=0.03,
+        help="Warmup ratio for scheduler (default: 0.03).",
+    )
+    parser.add_argument(
+        "--num_train_epochs",
+        type=float,
+        default=1.0,
+        help="Number of training epochs (default: 1).",
+    )
+    parser.add_argument(
+        "--max_seq_length",
+        type=int,
+        default=4096,
+        help="Max packed sequence length (default: 4096).",
+    )
+    parser.add_argument(
         "--attn_impl",
         type=str,
         default="flash_attention_2",
         help="Attention implementation passed to HF model (default: flash_attention_2).",
     )
-    parser.add_argument(
-        "--config",
-        type=Path,
-        help="Optional JSON config file. Any CLI flag overrides entries inside the JSON.",
-    )
-    args = parser.parse_args()
-    if args.config:
-        args = apply_json_config(args, args.config)
+
+    if config_args.config:
+        if not config_args.config.exists():
+            raise FileNotFoundError(config_args.config)
+        with config_args.config.open("r", encoding="utf-8") as handle:
+            config_data = json.load(handle)
+        normalized_defaults: Dict[str, object] = {}
+        for key, raw_value in config_data.items():
+            matched_action = next((action for action in parser._actions if action.dest == key), None)
+            if matched_action is None:
+                raise ValueError(f"Unknown config key '{key}' in {config_args.config}")
+            converter = matched_action.type
+            if converter and raw_value is not None and not isinstance(raw_value, converter):
+                normalized_defaults[key] = converter(raw_value)
+            else:
+                normalized_defaults[key] = raw_value
+        parser.set_defaults(**normalized_defaults)
+
+    args = parser.parse_args(remaining_argv)
+    args.config = config_args.config or getattr(args, "config", None)
     return args
-
-
-def apply_json_config(args: argparse.Namespace, config_path: Path) -> argparse.Namespace:
-    if not config_path.exists():
-        raise FileNotFoundError(config_path)
-    with config_path.open("r", encoding="utf-8") as handle:
-        config = json.load(handle)
-    for key, value in config.items():
-        if not hasattr(args, key):
-            raise ValueError(f"Unknown config key '{key}' in {config_path}")
-        current = getattr(args, key)
-        # CLI arguments take precedence; only override defaults untouched by user.
-        parser_default = parser_default_values().get(key)
-        if args.config and key == "config":
-            continue
-        if current == parser_default or key == "config":
-            setattr(args, key, value)
-    return args
-
-
-def parser_default_values() -> Dict[str, object]:
-    return {
-        "model_name_or_path": DEFAULT_MODEL,
-        "dataset_path": Path("data/dataset/combined_dataset.jsonl"),
-        "output_dir": Path("./stage1_style_injection"),
-        "logging_steps": 10,
-        "save_steps": 500,
-        "streaming": False,
-        "per_device_train_batch_size": 8,
-        "gradient_accumulation_steps": 16,
-        "learning_rate": 5e-5,
-        "warmup_ratio": 0.03,
-        "num_train_epochs": 1.0,
-        "max_seq_length": 4096,
-        "attn_impl": "flash_attention_2",
-        "config": None,
-    }
 
 
 def load_corpus(dataset_path: Path, streaming: bool) -> Dataset:
