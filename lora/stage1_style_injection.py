@@ -242,11 +242,13 @@ def build_trainer(
         packing=True,
     )
 
+    # Attach tokenizer to model for SFTTrainer compatibility
+    model.config.tokenizer = tokenizer
+    
     trainer = SFTTrainer(
         model=model,
         args=sft_config,
         train_dataset=dataset,
-        processing_class=tokenizer,
         dataset_text_field=None,
         formatting_func=formatting_func,
         peft_config=lora_config,
