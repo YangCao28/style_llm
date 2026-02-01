@@ -32,7 +32,7 @@ from peft import LoraConfig
 from transformers import AutoModelForCausalLM, AutoTokenizer, TrainingArguments
 from trl import DataCollatorForCompletionOnlyLM, SFTTrainer
 
-DEFAULT_MODEL = "meta-llama/Meta-Llama-3-8B-Instruct"
+DEFAULT_MODEL = "Qwen/Qwen3-8B-Base"
 RESPONSE_TEMPLATE = "### 正文\n"
 PROMPT_TEMPLATE = "### 文风语料\n"
 MERGED_TOKEN_STATEMENT = "【packed_style_sample】\n"
