@@ -13,6 +13,21 @@ conda run -p ./.conda python -m lora.stage1_style_injection \
   --dataset_path data/dataset/combined_dataset.jsonl \
   --output_dir ./stage1_style_injection
 ```
+Or load every hyperparameter from a JSON file:
+```bash
+conda run -p ./.conda python -m lora.stage1_style_injection \
+  --config lora/stage1_style_config.example.json
+```
+### Quick qualitative test
+After a training run finishes, load the adapter and run a short generation to inspect style:
+```bash
+conda run -p ./.conda python -m lora.test_style_injection \
+  --model_name_or_path meta-llama/Meta-Llama-3-8B-Instruct \
+  --lora_path stage1_style_injection \
+  --prompt "今日天气阴沉，"
+```
+Adjust `--prompt`, `--temperature`, or `--max_new_tokens` to survey different behaviors.
+
 Key hyperparameters:
 - LoRA: r=128, alpha=256, dropout=0.05, target modules = `q/k/v/o/gate/up/down`.
 - Context length: 4096 with packing enabled (4×1024 segments per sample).
@@ -29,3 +44,4 @@ Key hyperparameters:
 - Use `--streaming` if you host the JSONL on an object store and want to avoid local disk IO bottlenecks.
 - Adjust `per_device_train_batch_size` (up to 12–16) only if your monitoring shows under-utilized VRAM.
 - For multi-GPU runs, launch via Accelerate or DeepSpeed; no code changes are needed because the trainer inherits HF TrainingArguments semantics.
+- Copy `stage1_style_config.example.json` and edit values to create reproducible launch profiles. Any CLI option overrides the JSON entries, so you can keep multiple presets (e.g., 8B vs 8x7B) without duplicating scripts.

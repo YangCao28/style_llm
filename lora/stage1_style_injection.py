@@ -48,7 +48,11 @@ WHITESPACE_RE = re.compile(r"[\s\u3000]+")
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Stage-1 LoRA style injection training")
+    config_parser = argparse.ArgumentParser(add_help=False)
+    config_parser.add_argument("--config", type=Path, help="Path to JSON config file.")
+    config_args, remaining_argv = config_parser.parse_known_args()
+
+    parser = argparse.ArgumentParser(description="Stage-1 LoRA style injection training", parents=[config_parser])
     parser.add_argument("--model_name_or_path", default=DEFAULT_MODEL)
     parser.add_argument(
         "--dataset_path",
@@ -64,22 +68,84 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--logging_steps",
-        type=int,
-        default=10,
-        help="Trainer logging interval.",
+        parser.add_argument(
+            "--attn_impl",
+            type=str,
+            default="flash_attention_2",
+            help="Attention implementation passed to HF model (default: flash_attention_2)",
+        )
+
+        if config_args.config:
+            if not config_args.config.exists():
+                raise FileNotFoundError(config_args.config)
+            with config_args.config.open("r", encoding="utf-8") as handle:
+                config_data = json.load(handle)
+            normalized_defaults = {}
+            for key, raw_value in config_data.items():
+                matched_action = next((action for action in parser._actions if action.dest == key), None)
+                if matched_action is None:
+                    raise ValueError(f"Unknown config key '{key}' in {config_args.config}")
+                converter = matched_action.type
+                if converter and raw_value is not None and not isinstance(raw_value, converter):
+                    normalized_defaults[key] = converter(raw_value)
+                else:
+                    normalized_defaults[key] = raw_value
+            parser.set_defaults(**normalized_defaults)
+
+        args = parser.parse_args(remaining_argv)
+        args.config = config_args.config or args.config
+        return args
+        "--attn_impl",
+        type=str,
+        default="flash_attention_2",
+        help="Attention implementation passed to HF model (default: flash_attention_2).",
     )
     parser.add_argument(
-        "--save_steps",
-        type=int,
-        default=500,
-        help="Checkpoint interval for QA sampling.",
+        "--config",
+        type=Path,
+        help="Optional JSON config file. Any CLI flag overrides entries inside the JSON.",
     )
-    parser.add_argument(
-        "--streaming",
-        action="store_true",
-        help="Use datasets streaming mode for very large corpora.",
-    )
-    return parser.parse_args()
+    args = parser.parse_args()
+    if args.config:
+        args = apply_json_config(args, args.config)
+    return args
+
+
+def apply_json_config(args: argparse.Namespace, config_path: Path) -> argparse.Namespace:
+    if not config_path.exists():
+        raise FileNotFoundError(config_path)
+    with config_path.open("r", encoding="utf-8") as handle:
+        config = json.load(handle)
+    for key, value in config.items():
+        if not hasattr(args, key):
+            raise ValueError(f"Unknown config key '{key}' in {config_path}")
+        current = getattr(args, key)
+        # CLI arguments take precedence; only override defaults untouched by user.
+        parser_default = parser_default_values().get(key)
+        if args.config and key == "config":
+            continue
+        if current == parser_default or key == "config":
+            setattr(args, key, value)
+    return args
+
+
+def parser_default_values() -> Dict[str, object]:
+    return {
+        "model_name_or_path": DEFAULT_MODEL,
+        "dataset_path": Path("data/dataset/combined_dataset.jsonl"),
+        "output_dir": Path("./stage1_style_injection"),
+        "logging_steps": 10,
+        "save_steps": 500,
+        "streaming": False,
+        "per_device_train_batch_size": 8,
+        "gradient_accumulation_steps": 16,
+        "learning_rate": 5e-5,
+        "warmup_ratio": 0.03,
+        "num_train_epochs": 1.0,
+        "max_seq_length": 4096,
+        "attn_impl": "flash_attention_2",
+        "config": None,
+    }
 
 
 def load_corpus(dataset_path: Path, streaming: bool) -> Dataset:
@@ -112,21 +178,21 @@ def formatting_func(record: Dict[str, str]) -> str:
     return f"{PROMPT_TEMPLATE}{MERGED_TOKEN_STATEMENT}{RESPONSE_TEMPLATE}{body}\n"
 
 
-def build_tokenizer(model_name: str):
+def build_tokenizer(model_name: str, max_seq_length: int):
     tokenizer = AutoTokenizer.from_pretrained(model_name, use_fast=True)
     tokenizer.padding_side = "right"
-    tokenizer.model_max_length = 4096
+    tokenizer.model_max_length = max_seq_length
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
     return tokenizer
 
 
-def build_model(model_name: str):
+def build_model(model_name: str, attn_impl: str):
     return AutoModelForCausalLM.from_pretrained(
         model_name,
         torch_dtype="auto",
         device_map="auto",
-        attn_implementation="flash_attention_2",
+        attn_implementation=attn_impl,
     )
 
 
@@ -138,6 +204,13 @@ def build_trainer(
     logging_steps: int,
     save_steps: int,
     streaming: bool,
+    per_device_train_batch_size: int,
+    gradient_accumulation_steps: int,
+    learning_rate: float,
+    warmup_ratio: float,
+    num_train_epochs: float,
+    max_seq_length: int,
+    attn_impl: str,
 ):
     lora_config = LoraConfig(
         r=128,
@@ -164,12 +237,12 @@ def build_trainer(
 
     training_args = TrainingArguments(
         output_dir=str(output_dir),
-        per_device_train_batch_size=8,
-        gradient_accumulation_steps=16,
-        learning_rate=5e-5,
+        per_device_train_batch_size=per_device_train_batch_size,
+        gradient_accumulation_steps=gradient_accumulation_steps,
+        learning_rate=learning_rate,
         lr_scheduler_type="cosine",
-        warmup_ratio=0.03,
-        num_train_epochs=1,
+        warmup_ratio=warmup_ratio,
+        num_train_epochs=num_train_epochs,
         logging_steps=logging_steps,
         save_steps=save_steps,
         save_total_limit=5,
@@ -181,7 +254,7 @@ def build_trainer(
         report_to=("tensorboard",),
         dataloader_drop_last=True,
         ddp_find_unused_parameters=False,
-        attn_implementation="flash_attention_2",
+        attn_implementation=attn_impl,
     )
 
     trainer = SFTTrainer(
@@ -191,7 +264,7 @@ def build_trainer(
         dataset_text_field=None,
         formatting_func=formatting_func,
         tokenizer=tokenizer,
-        max_seq_length=4096,
+        max_seq_length=max_seq_length,
         data_collator=collator,
         packing=True,
         peft_config=lora_config,
@@ -203,8 +276,8 @@ def main() -> None:
     args = parse_args()
     dataset = load_corpus(args.dataset_path, args.streaming)
 
-    tokenizer = build_tokenizer(args.model_name_or_path)
-    model = build_model(args.model_name_or_path)
+    tokenizer = build_tokenizer(args.model_name_or_path, args.max_seq_length)
+    model = build_model(args.model_name_or_path, args.attn_impl)
 
     trainer = build_trainer(
         model=model,
@@ -214,6 +287,13 @@ def main() -> None:
         logging_steps=args.logging_steps,
         save_steps=args.save_steps,
         streaming=args.streaming,
+        per_device_train_batch_size=args.per_device_train_batch_size,
+        gradient_accumulation_steps=args.gradient_accumulation_steps,
+        learning_rate=args.learning_rate,
+        warmup_ratio=args.warmup_ratio,
+        num_train_epochs=args.num_train_epochs,
+        max_seq_length=args.max_seq_length,
+        attn_impl=args.attn_impl,
     )
 
     trainer.train()
