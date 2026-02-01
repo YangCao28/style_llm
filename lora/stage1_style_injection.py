@@ -249,7 +249,6 @@ def build_trainer(
         dataset_text_field=None,
         formatting_func=formatting_func,
         tokenizer=tokenizer,
-        sft_config=sft_config,
         response_template=RESPONSE_TEMPLATE,
         peft_config=lora_config,
     )
