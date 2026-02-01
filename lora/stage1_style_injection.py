@@ -240,16 +240,14 @@ def build_trainer(
         dataset_text_field=None,
         max_seq_length=max_seq_length,
         packing=True,
+        dataset_kwargs={"skip_prepare_dataset": False},
     )
-
-    # Attach tokenizer to model for SFTTrainer compatibility
-    model.config.tokenizer = tokenizer
     
     trainer = SFTTrainer(
         model=model,
+        tokenizer=tokenizer,
         args=sft_config,
         train_dataset=dataset,
-        dataset_text_field=None,
         formatting_func=formatting_func,
         peft_config=lora_config,
     )
