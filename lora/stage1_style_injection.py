@@ -253,7 +253,7 @@ def main() -> None:
         optim="adamw_torch_fused",
         max_grad_norm=1.0,
         gradient_checkpointing=True,
-        report_to=["tensorboard"],
+        report_to=[],
         dataloader_drop_last=True,
         ddp_find_unused_parameters=False,
     )
