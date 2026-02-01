@@ -70,6 +70,8 @@ def load_source_records(source: Dict[str, Any]) -> Iterator[Dict[str, Any]]:
         text = enriched.get("text")
         if isinstance(text, str):
             enriched["text"] = sanitize_text(text)
+        if "author" not in enriched or enriched["author"] is None:
+            enriched["author"] = ""
         yield enriched
 
 
