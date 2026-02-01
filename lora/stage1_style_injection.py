@@ -240,6 +240,7 @@ def build_trainer(
         dataset_text_field=None,
         max_seq_length=max_seq_length,
         packing=True,
+        response_template=RESPONSE_TEMPLATE,
     )
 
     trainer = SFTTrainer(
@@ -249,7 +250,6 @@ def build_trainer(
         dataset_text_field=None,
         formatting_func=formatting_func,
         tokenizer=tokenizer,
-        response_template=RESPONSE_TEMPLATE,
         peft_config=lora_config,
     )
     return trainer
