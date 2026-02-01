@@ -27,10 +27,10 @@ from functools import partial
 from pathlib import Path
 from typing import Dict, Iterable, List
 
+import torch
 from datasets import Dataset, load_dataset
-from peft import LoraConfig
-from transformers import AutoModelForCausalLM, AutoTokenizer
-from trl import SFTConfig, SFTTrainer
+from peft import LoraConfig, get_peft_model
+from transformers import AutoModelForCausalLM, AutoTokenizer, Trainer, TrainingArguments
 
 DEFAULT_MODEL = "Qwen/Qwen3-8B-Base"
 RESPONSE_TEMPLATE = "### 正文\n"
@@ -181,26 +181,75 @@ def build_model(model_name: str, attn_impl: str):
         model_name,
         torch_dtype="auto",
         device_map="auto",
-        attn_implementation=attn_impl,
+     
+
+
+class PackingDataCollator:
+    """Packs multiple samples into sequences of max_length for efficient training."""
+    
+    def __init__(self, tokenizer, max_length: int = 4096):
+        self.tokenizer = tokenizer
+        self.max_length = max_length
+        self.pad_token_id = tokenizer.pad_token_id
+    
+    def __call__(self, examples):
+        # Concatenate all input_ids from the batch
+        all_input_ids = []
+        for example in examples:
+            all_input_ids.extend(example["input_ids"])
+            all_input_ids.append(self.tokenizer.eos_token_id)
+        
+        # Split into chunks of max_length
+        packed_input_ids = []
+        for i in range(0, len(all_input_ids), self.max_length):
+            chunk = all_input_ids[i:i + self.max_length]
+            if len(chunk) == self.max_length:
+                packed_input_ids.append(chunk)
+        
+        # If no full chunks, pad the last one
+        if not packed_input_ids and all_input_ids:
+            chunk = all_input_ids[:self.max_length]
+            chunk = chunk + [self.pad_token_id] * (self.max_length - len(chunk))
+            packed_input_ids.append(chunk)
+        
+        if not packed_input_ids:
+            # Fallback: create a single sequence
+            packed_input_ids = [[self.pad_token_id] * self.max_length]
+        
+        # Convert to tensors
+        input_ids = torch.tensor(packed_input_ids, dtype=torch.long)
+        labels = input_ids.clone()
+        
+        # Mask padding tokens in labels
+        labels[labels == self.pad_token_id] = -100
+        
+        return {
+            "input_ids": input_ids,
+            "attention_mask": (input_ids != self.pad_token_id).long(),
+            "labels": labels,
+        }   attn_implementation=attn_impl,
     )
 
-
-def build_trainer(
-    model,
-    tokenizer,
-    dataset,
-    output_dir: Path,
-    logging_steps: int,
-    save_steps: int,
-    streaming: bool,
-    per_device_train_batch_size: int,
-    gradient_accumulation_steps: int,
-    learning_rate: float,
+    add_special_tokens=False,
+        )
+    
+    tokenized_dataset = dataset.map(
+        tokenize_function,
+        batched=True,
+        remove_columns=dataset.column_names,
+    )
+    
+    # Use packing collator for efficient training
+    data_collator = PackingDataCollator(
+        tokenizer=tokenizer,
+        max_length=max_seq_length: float,
     warmup_steps: int,
     num_train_epochs: float,
     max_seq_length: int,
     attn_impl: str,
 ):
+    lora_config = LoraConfig(
+    # Apply LoRA to model
     lora_config = LoraConfig(
         r=128,
         lora_alpha=256,
@@ -217,8 +266,32 @@ def build_trainer(
         bias="none",
         task_type="CAUSAL_LM",
     )
+    model = get_peft_model(model, lora_config)
+    model.print_trainable_parameters()
 
-    sft_config = SFTConfig(
+    # Tokenize dataset
+    def tokenize_function(examples):
+        texts = [formatting_func({"text": text}) for text in examples["text"]]
+        return tokenizer(
+            texts,
+            truncation=True,
+            max_length=max_seq_length,
+            padding=False,
+        )
+    
+    tokenized_dataset = dataset.map(
+        tokenize_function,
+        batched=True,
+        remove_columns=dataset.column_names,
+    )
+    
+    # Data collator for causal LM
+    data_collator = DataCollatorForLanguageModeling(
+        tokenizer=tokenizer,
+        mlm=False,
+    )
+
+    training_args = TrainingArguments(
         output_dir=str(output_dir),
         per_device_train_batch_size=per_device_train_batch_size,
         gradient_accumulation_steps=gradient_accumulation_steps,
@@ -234,23 +307,16 @@ def build_trainer(
         optim="adamw_torch_fused",
         max_grad_norm=1.0,
         gradient_checkpointing=True,
-        report_to=("tensorboard",),
+        report_to=["tensorboard"],
         dataloader_drop_last=True,
         ddp_find_unused_parameters=False,
-        dataset_text_field=None,
-        max_seq_length=max_seq_length,
-        packing=True,
-        dataset_kwargs={"skip_prepare_dataset": False},
     )
     
-    trainer = SFTTrainer(
+    trainer = Trainer(
         model=model,
-        tokenizer=tokenizer,
-        args=sft_config,
-        train_dataset=dataset,
-        formatting_func=formatting_func,
-        peft_config=lora_config,
-    )
+        args=training_args,
+        train_dataset=tokenized_dataset,
+        data_collator=data_collator
     return trainer
 
 
@@ -280,7 +346,7 @@ def main() -> None:
 
     trainer.train()
     trainer.save_model()
-    trainer.tokenizer.save_pretrained(args.output_dir)
+    tokenizer.save_pretrained(args.output_dir)
 
 
 if __name__ == "__main__":
