@@ -67,8 +67,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--logging_steps", type=int, default=10)
     parser.add_argument("--save_steps", type=int, default=500)
     parser.add_argument("--streaming", action="store_true")
-    parser.add_argument("--per_device_train_batch_size", type=int, default=4)
-    parser.add_argument("--gradient_accumulation_steps", type=int, default=64)
+    parser.add_argument("--per_device_train_batch_size", type=int, default=16)
+    parser.add_argument("--gradient_accumulation_steps", type=int, default=16)
     parser.add_argument("--learning_rate", type=float, default=1e-4)
     parser.add_argument("--warmup_ratio", type=float, default=0.03)
     parser.add_argument("--warmup_steps", type=int, default=0)
@@ -173,6 +173,12 @@ class PackingDataCollator:
 
 def main() -> None:
     args = parse_args()
+    
+    # 清理GPU缓存，释放残留显存
+    import torch
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
+        print(f"✓ GPU缓存已清理")
     
     # 1. 加载数据集
     print(f"Loading dataset from {args.dataset_path}")
