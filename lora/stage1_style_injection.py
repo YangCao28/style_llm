@@ -29,7 +29,7 @@ from typing import Dict, Iterable, List
 
 from datasets import Dataset, load_dataset
 from peft import LoraConfig
-from transformers import AutoModelForCausalLM, AutoTokenizer, TrainingArguments
+from transformers import AutoModelForCausalLM, AutoTokenizer
 from trl import SFTConfig, SFTTrainer
 
 DEFAULT_MODEL = "Qwen/Qwen3-8B-Base"
@@ -218,7 +218,7 @@ def build_trainer(
         task_type="CAUSAL_LM",
     )
 
-    training_args = TrainingArguments(
+    sft_config = SFTConfig(
         output_dir=str(output_dir),
         per_device_train_batch_size=per_device_train_batch_size,
         gradient_accumulation_steps=gradient_accumulation_steps,
@@ -237,9 +237,6 @@ def build_trainer(
         report_to=("tensorboard",),
         dataloader_drop_last=True,
         ddp_find_unused_parameters=False,
-    )
-
-    sft_config = SFTConfig(
         dataset_text_field=None,
         max_seq_length=max_seq_length,
         packing=True,
@@ -247,7 +244,7 @@ def build_trainer(
 
     trainer = SFTTrainer(
         model=model,
-        args=training_args,
+        args=sft_config,
         train_dataset=dataset,
         dataset_text_field=None,
         formatting_func=formatting_func,
