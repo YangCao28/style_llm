@@ -91,10 +91,10 @@ def parse_args() -> argparse.Namespace:
         help="Peak learning rate for cosine schedule (default: 5e-5).",
     )
     parser.add_argument(
-        "--warmup_ratio",
-        type=float,
-        default=0.03,
-        help="Warmup ratio for scheduler (default: 0.03).",
+        "--warmup_steps",
+        type=int,
+        default=0,
+        help="Number of warmup steps for scheduler (default: 0).",
     )
     parser.add_argument(
         "--num_train_epochs",
@@ -196,7 +196,7 @@ def build_trainer(
     per_device_train_batch_size: int,
     gradient_accumulation_steps: int,
     learning_rate: float,
-    warmup_ratio: float,
+    warmup_steps: int,
     num_train_epochs: float,
     max_seq_length: int,
     attn_impl: str,
@@ -224,7 +224,7 @@ def build_trainer(
         gradient_accumulation_steps=gradient_accumulation_steps,
         learning_rate=learning_rate,
         lr_scheduler_type="cosine",
-        warmup_ratio=warmup_ratio,
+        warmup_steps=warmup_steps,
         num_train_epochs=num_train_epochs,
         logging_steps=logging_steps,
         save_steps=save_steps,
@@ -243,7 +243,6 @@ def build_trainer(
         dataset_text_field=None,
         max_seq_length=max_seq_length,
         packing=True,
-        response_template=RESPONSE_TEMPLATE,
     )
 
     trainer = SFTTrainer(
@@ -254,6 +253,7 @@ def build_trainer(
         formatting_func=formatting_func,
         tokenizer=tokenizer,
         sft_config=sft_config,
+        response_template=RESPONSE_TEMPLATE,
         peft_config=lora_config,
     )
     return trainer
@@ -277,7 +277,7 @@ def main() -> None:
         per_device_train_batch_size=args.per_device_train_batch_size,
         gradient_accumulation_steps=args.gradient_accumulation_steps,
         learning_rate=args.learning_rate,
-        warmup_ratio=args.warmup_ratio,
+        warmup_steps=args.warmup_steps,
         num_train_epochs=args.num_train_epochs,
         max_seq_length=args.max_seq_length,
         attn_impl=args.attn_impl,
