@@ -124,9 +124,6 @@ dependencies:
       - stack-data==0.6.3
       - sympy==1.13.1
       - tokenizers==0.22.2
-      - torch==2.6.0
-      - torchaudio==2.6.0
-      - torchvision==0.21.0
       - tornado==6.5.4
       - tqdm==4.67.1
       - traitlets==5.14.3
