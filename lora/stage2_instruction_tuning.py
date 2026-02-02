@@ -63,14 +63,11 @@ class LossRecorderCallback(TrainerCallback):
 
 def main():
     # 1. 解析参数
-    config_parser = argparse.ArgumentParser(add_help=False)
-    config_parser.add_argument("--config", type=Path)
-    config_args, _ = config_parser.parse_known_args()
-    
     parser = argparse.ArgumentParser()
+    parser.add_argument("--config", type=Path, help="Path to JSON config file")
     parser.add_argument("--model_name_or_path", type=str)
-    parser.add_argument("--dataset_path", type=Path)
-    parser.add_argument("--output_dir", type=Path)
+    parser.add_argument("--dataset_path", type=str)
+    parser.add_argument("--output_dir", type=str)
     parser.add_argument("--per_device_train_batch_size", type=int, default=8)
     parser.add_argument("--gradient_accumulation_steps", type=int, default=8)
     parser.add_argument("--learning_rate", type=float, default=5e-5)
@@ -82,15 +79,18 @@ def main():
     parser.add_argument("--save_steps", type=int, default=200)
     parser.add_argument("--attn_impl", type=str, default="sdpa")
     
-    # 加载配置文件
-    if config_args.config:
-        if not config_args.config.exists():
-            raise FileNotFoundError(config_args.config)
-        with config_args.config.open("r", encoding="utf-8") as f:
-            config_data = json.load(f)
-        parser.set_defaults(**config_data)
-    
     args = parser.parse_args()
+    
+    # 加载配置文件
+    if args.config:
+        if not args.config.exists():
+            raise FileNotFoundError(f"Config file not found: {args.config}")
+        with args.config.open("r", encoding="utf-8") as f:
+            config_data = json.load(f)
+        # 用配置文件中的值覆盖默认值（命令行参数优先）
+        for key, value in config_data.items():
+            if not hasattr(args, key) or getattr(args, key) is None or getattr(args, key) == parser.get_default(key):
+                setattr(args, key, value)
     
     # 检查必需参数
     if not args.model_name_or_path or not args.dataset_path or not args.output_dir:
