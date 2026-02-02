@@ -68,9 +68,9 @@ def main():
     config_args, _ = config_parser.parse_known_args()
     
     parser = argparse.ArgumentParser()
-    parser.add_argument("--model_name_or_path", type=str, required=True)
-    parser.add_argument("--dataset_path", type=Path, required=True)
-    parser.add_argument("--output_dir", type=Path, required=True)
+    parser.add_argument("--model_name_or_path", type=str)
+    parser.add_argument("--dataset_path", type=Path)
+    parser.add_argument("--output_dir", type=Path)
     parser.add_argument("--per_device_train_batch_size", type=int, default=8)
     parser.add_argument("--gradient_accumulation_steps", type=int, default=8)
     parser.add_argument("--learning_rate", type=float, default=5e-5)
@@ -91,6 +91,13 @@ def main():
         parser.set_defaults(**config_data)
     
     args = parser.parse_args()
+    
+    # 检查必需参数
+    if not args.model_name_or_path or not args.dataset_path or not args.output_dir:
+        parser.error("Required arguments: --model_name_or_path, --dataset_path, --output_dir (or provide via --config)")
+        
+    args.dataset_path = Path(args.dataset_path)
+    args.output_dir = Path(args.output_dir)
     args.output_dir.mkdir(parents=True, exist_ok=True)
     
     print("=" * 80)
