@@ -170,11 +170,8 @@ def main():
             texts,
             truncation=True,
             max_length=args.max_seq_length,
-            padding=False,
+            padding="max_length",
         )
-        
-        # 设置 labels（用于计算 loss）
-        result["labels"] = result["input_ids"].copy()
         return result
     
     tokenized_dataset = dataset.map(
