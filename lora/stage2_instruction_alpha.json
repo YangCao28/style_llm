@@ -9,6 +9,6 @@
   "num_train_epochs": 1,
   "max_seq_length": 1536,
   "logging_steps": 10,
-  "save_steps": 200,
+  "save_steps": 50,
   "attn_impl": "sdpa"
 }

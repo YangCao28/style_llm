@@ -66,7 +66,7 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--output_dir", type=Path, default=Path("./stage1_style_injection"))
     parser.add_argument("--logging_steps", type=int, default=10)
-    parser.add_argument("--save_steps", type=int, default=500)
+    parser.add_argument("--save_steps", type=int, default=100)
     parser.add_argument("--streaming", action="store_true")
     parser.add_argument("--per_device_train_batch_size", type=int, default=16)
     parser.add_argument("--gradient_accumulation_steps", type=int, default=16)

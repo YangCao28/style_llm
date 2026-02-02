@@ -100,7 +100,7 @@ def main():
     parser.add_argument("--num_train_epochs", type=float, default=2.0)
     parser.add_argument("--max_seq_length", type=int, default=2048)
     parser.add_argument("--logging_steps", type=int, default=10)
-    parser.add_argument("--save_steps", type=int, default=200)
+    parser.add_argument("--save_steps", type=int, default=50)
     parser.add_argument("--attn_impl", type=str, default="sdpa")
     
     args = parser.parse_args()
