@@ -63,6 +63,11 @@ class LossRecorderCallback(TrainerCallback):
 
 
 def main():
+    # 清理 CUDA 缓存
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
+        print(f"CUDA available: {torch.cuda.get_device_name(0)}")
+    
     # 1. 解析参数
     parser = argparse.ArgumentParser()
     parser.add_argument("--config", type=Path, help="Path to JSON config file")
