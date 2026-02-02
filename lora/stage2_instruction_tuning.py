@@ -63,10 +63,21 @@ class LossRecorderCallback(TrainerCallback):
 
 
 def main():
-    # 清理 CUDA 缓存
+    # 强制清理 CUDA 缓存和重置设备
     if torch.cuda.is_available():
         torch.cuda.empty_cache()
-        print(f"CUDA available: {torch.cuda.get_device_name(0)}")
+        torch.cuda.reset_peak_memory_stats()
+        # 尝试初始化 CUDA
+        try:
+            _ = torch.zeros(1).cuda()
+            torch.cuda.synchronize()
+            torch.cuda.empty_cache()
+            print(f"✓ CUDA initialized: {torch.cuda.get_device_name(0)}")
+            print(f"  Available memory: {torch.cuda.get_device_properties(0).total_memory / 1e9:.2f} GB")
+        except RuntimeError as e:
+            print(f"⚠️  CUDA initialization failed: {e}")
+            print("  Try: pkill -9 python; nvidia-smi --gpu-reset")
+            raise
     
     # 1. 解析参数
     parser = argparse.ArgumentParser()
@@ -168,6 +179,9 @@ def main():
         remove_columns=dataset.column_names,
     )
     print(f"✓ Tokenization complete: {len(tokenized_dataset):,} samples")
+    
+    # 清理显存
+    torch.cuda.empty_cache()
     
     # 6. 训练参数
     training_args = TrainingArguments(
