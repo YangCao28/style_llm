@@ -22,6 +22,7 @@ from transformers import (
     Trainer,
     TrainingArguments,
     TrainerCallback,
+    DataCollatorForLanguageModeling,
 )
 
 DEFAULT_SYSTEM_PROMPT = "你是一个文学创作助手，擅长用各种风格改写文本。"
@@ -171,9 +172,7 @@ def main():
         per_device_train_batch_size=args.per_device_train_batch_size,
         gradient_accumulation_steps=args.gradient_accumulation_steps,
         learning_rate=args.learning_rate,
-        lr_scheduler_type="cosine",
-        warmup_ratio=args.warmup_ratio,
-        warmup_steps=args.warmup_steps,
+        lr_schesteps=args.warmup_steps,
         num_train_epochs=args.num_train_epochs,
         logging_steps=args.logging_steps,
         save_steps=args.save_steps,
@@ -187,20 +186,27 @@ def main():
         dataloader_drop_last=False,
     )
     
-    # 7. 创建 Trainer
+    # 7. 创建 data collator
+    data_collator = DataCollatorForLanguageModeling(
+        tokenizer=tokenizer,
+        mlm=False,
+    )
+    
+    # 8. 创建 Trainer
     loss_recorder = LossRecorderCallback()
     
     trainer = Trainer(
         model=model,
         args=training_args,
         train_dataset=tokenized_dataset,
-        tokenizer=tokenizer,
+        data_collator=data_collator,
         callbacks=[loss_recorder],
     )
     
+    # 9
     # 8. 开始训练
     print("\n" + "=" * 80)
-    print("Starting training...")
+    pr10nt("Starting training...")
     print("=" * 80 + "\n")
     
     trainer.train()
