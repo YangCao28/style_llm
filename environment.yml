@@ -1,8 +1,7 @@
 name: main
 channels:
-  - pytorch
-  - nvidia
   - conda-forge
+  - nvidia
 dependencies:
   - _libgcc_mutex=0.1=conda_forge
   - _openmp_mutex=4.5=2_gnu
@@ -32,10 +31,7 @@ dependencies:
   - wheel=0.45.1=pyhd8ed1ab_1
   - zstd=1.5.7=hb78ec9c_6
   - pytorch::pytorch=2.6.0
-  - pytorch::torchvision=0.21.0
-  - pytorch::torchaudio=2.6.0
-  - pytorch::pytorch-cuda=12.4
-  - pip:
+  - pip=26.0=pyhff2d567_0
       - accelerate==1.12.0
       - aiohappyeyeballs==2.6.1
       - aiohttp==3.13.3
@@ -124,10 +120,13 @@ dependencies:
       - rich==14.3.2
       - safetensors==0.7.0
       - shellingham==1.5.4
-      - sixenizers==0.22.2
-      - torch==2.6.0+cu124
-      - torchaudio==2.6.0+cu124
-      - torchvision==0.21.0+cu124
+      - six==1.17.0
+      - stack-data==0.6.3
+      - sympy==1.13.1
+      - tokenizers==0.22.2
+      - torch==2.6.0
+      - torchaudio==2.6.0
+      - torchvision==0.21.0
       - tornado==6.5.4
       - tqdm==4.67.1
       - traitlets==5.14.3
