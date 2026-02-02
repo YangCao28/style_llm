@@ -133,8 +133,7 @@ def main():
     print(f"\nLoading model from {args.model_name_or_path}")
     model = AutoModelForCausalLM.from_pretrained(
         args.model_name_or_path,
-        torch_dtype="auto",
-        device_map="auto",
+        torch_dtype=torch.bfloat16,
         attn_implementation=args.attn_impl,
     )
     print(f"✓ Model loaded (继续训练已有的 LoRA 权重)")
