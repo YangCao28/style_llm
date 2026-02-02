@@ -185,8 +185,9 @@ def main():
     )
     print(f"✓ Tokenization complete: {len(tokenized_dataset):,} samples")
     
-    # 清理显存
-    torch.cuda.empty_cache()
+    # 清理一次显存（仅在有 CUDA 时）
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
     
     # 6. 训练参数
     training_args = TrainingArguments(
@@ -244,6 +245,10 @@ def main():
         print(f"  Initial loss: {loss_recorder.training_losses[0]:.4f}")
         print(f"  Final loss: {loss_recorder.training_losses[-1]:.4f}")
         print(f"  Total steps: {len(loss_recorder.steps)}")
+
+    # 训练结束后再清一次显存，方便同一进程后续继续使用 GPU
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
 
 
 if __name__ == "__main__":
