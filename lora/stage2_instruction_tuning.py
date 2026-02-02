@@ -137,8 +137,14 @@ def main():
     # 5. Tokenize 数据集
     print("\nTokenizing dataset...")
     def tokenize_function(examples):
-        formatted = [formatting_func_stage2(ex) for ex in examples]
-        texts = [item["text"] for item in formatted]
+        # 当 batched=True 时，examples 是字典，每个键对应一个列表
+        texts = []
+        num_samples = len(examples["conversations"])
+        
+        for i in range(num_samples):
+            example = {key: examples[key][i] for key in examples}
+            formatted = formatting_func_stage2(example)
+            texts.append(formatted["text"])
         
         result = tokenizer(
             texts,
