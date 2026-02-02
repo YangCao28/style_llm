@@ -127,14 +127,22 @@ def main() -> None:
     torch.manual_seed(args.seed)
 
     model_path = Path(args.model_name_or_path)
-    print(f"Loading Stage-2 model from: {model_path}")
+    print(f"model_name_or_path = {args.model_name_or_path}")
 
-    tokenizer = AutoTokenizer.from_pretrained(model_path)
+    # 优先当作本地目录使用；如果目录不存在，再回退为 HF 仓库名
+    if model_path.exists():
+        print(f"Loading Stage-2 model from local folder: {model_path}")
+        tokenizer = AutoTokenizer.from_pretrained(model_path)
+        model_load_id = model_path
+    else:
+        print(f"⚠ 本地找不到目录: {model_path}，将尝试作为 Hugging Face 模型仓库加载。")
+        model_load_id = args.model_name_or_path
+        tokenizer = AutoTokenizer.from_pretrained(model_load_id)
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
 
     model = AutoModelForCausalLM.from_pretrained(
-        model_path,
+        model_load_id,
         torch_dtype=torch.bfloat16,
         device_map="auto",
         attn_implementation=args.attn_impl,
