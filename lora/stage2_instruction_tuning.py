@@ -37,15 +37,20 @@ def formatting_func_stage2(example):
     # 构建对话格式
     text_parts = []
     for msg in conversations:
-        role = msg.get("from", "")
-        content = msg.get("value", "")
-        
-        if role == "system":
-            text_parts.append(f"<|im_start|>system\n{content}<|im_end|>")
-        elif role == "human":
-            text_parts.append(f"<|im_start|>user\n{content}<|im_end|>")
-        elif role == "gpt":
-            text_parts.append(f"<|im_start|>assistant\n{content}<|im_end|>")
+        # 兼容两种字段命名：{"role", "content"} 或 {"from", "value"}
+        role = msg.get("role") or msg.get("from") or "user"
+        content = msg.get("content") or msg.get("value") or ""
+
+        # 归一化角色名称
+        if role in ("system", "sys"):
+            norm_role = "system"
+        elif role in ("assistant", "gpt", "bot"):
+            norm_role = "assistant"
+        else:
+            # human / user / 其他一律当作 user 处理
+            norm_role = "user"
+
+        text_parts.append(f"<|im_start|>{norm_role}\n{content}<|im_end|>")
     
     return {"text": "\n".join(text_parts)}
 
@@ -221,10 +226,9 @@ def main():
         callbacks=[loss_recorder],
     )
     
-    # 9
     # 8. 开始训练
     print("\n" + "=" * 80)
-    pr10nt("Starting training...")
+    print("Starting training...")
     print("=" * 80 + "\n")
     
     trainer.train()

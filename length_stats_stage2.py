@@ -19,9 +19,23 @@ def main():
         for line in f:
             rec = json.loads(line)
             conv = rec.get("conversations", [])
-            text = "\n".join(
-                f"<|im_start|>{m['from']}\n{m['value']}<|im_end|>" for m in conv
-            )
+            # 支持两种格式：{"role", "content"} 或 {"from", "value"}
+            parts = []
+            for m in conv:
+                role = m.get("role") or m.get("from") or "user"
+                content = m.get("content") or m.get("value") or ""
+
+                # 归一化成 system / user / assistant 三类
+                if role in ("system", "sys"):
+                    norm_role = "system"
+                elif role in ("assistant", "gpt", "bot"):
+                    norm_role = "assistant"
+                else:
+                    norm_role = "user"
+
+                parts.append(f"<|im_start|>{norm_role}\n{content}<|im_end|>")
+
+            text = "\n".join(parts)
             ids = tok.encode(text)
             lengths.append(len(ids))
 
