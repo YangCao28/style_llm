@@ -1,0 +1,15 @@
+{
+  "model_name_or_path": "stage1_style_injection/checkpoint-531",
+  "dataset_path": "data/stage2_sample_5000.jsonl",
+  "output_dir": "./stage2_instruction_tuning",
+  "per_device_train_batch_size": 8,
+  "gradient_accumulation_steps": 8,
+  "learning_rate": 5e-5,
+  "warmup_ratio": 0.03,
+  "warmup_steps": 0,
+  "num_train_epochs": 2,
+  "max_seq_length": 2048,
+  "logging_steps": 10,
+  "save_steps": 200,
+  "attn_impl": "sdpa"
+}
