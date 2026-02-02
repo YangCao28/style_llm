@@ -27,12 +27,13 @@ import argparse
 import json
 import re
 from pathlib import Path
-from typing import Dict
+from typing import Dict, List
 
+import matplotlib.pyplot as plt
 import torch
 from datasets import load_dataset
 from peft import LoraConfig, get_peft_model
-from transformers import AutoModelForCausalLM, AutoTokenizer, Trainer, TrainingArguments
+from transformers import AutoModelForCausalLM, AutoTokenizer, Trainer, TrainingArguments, TrainerCallback
 
 DEFAULT_MODEL = "Qwen/Qwen3-8B-Base"
 RESPONSE_TEMPLATE = "### 正文\n"
@@ -170,6 +171,54 @@ class PackingDataCollator:
             "labels": labels,
         }
 
+class LossRecorderCallback(TrainerCallback):
+    """记录训练过程中的 loss 值"""
+    
+    def __init__(self):
+        self.training_losses: List[float] = []
+        self.steps: List[int] = []
+    
+    def on_log(self, args, state, control, logs=None, **kwargs):
+        if logs and "loss" in logs:
+            self.training_losses.append(logs["loss"])
+            self.steps.append(state.global_step)
+
+
+def plot_loss_curve(losses: List[float], steps: List[int], output_dir: Path) -> None:
+    """绘制并保存 loss 曲线图"""
+    if not losses:
+        print("⚠ 没有 loss 数据，跳过绘图")
+        return
+    
+    plt.figure(figsize=(12, 6))
+    plt.plot(steps, losses, 'b-', linewidth=1.5, alpha=0.8)
+    plt.xlabel('Training Steps', fontsize=12)
+    plt.ylabel('Loss', fontsize=12)
+    plt.title('Training Loss Curve', fontsize=14, fontweight='bold')
+    plt.grid(True, alpha=0.3)
+    plt.tight_layout()
+    
+    # 保存图片
+    loss_plot_path = output_dir / "loss_curve.png"
+    plt.savefig(loss_plot_path, dpi=300, bbox_inches='tight')
+    print(f"✓ Loss 曲线图已保存到: {loss_plot_path}")
+    
+    # 保存 loss 数据到 JSON
+    loss_data = {
+        "steps": steps,
+        "losses": losses,
+        "min_loss": min(losses),
+        "final_loss": losses[-1],
+        "total_steps": len(steps)
+    }
+    loss_json_path = output_dir / "loss_history.json"
+    with open(loss_json_path, 'w', encoding='utf-8') as f:
+        json.dump(loss_data, f, indent=2)
+    print(f"✓ Loss 数据已保存到: {loss_json_path}")
+    
+    plt.close()
+
+
 
 def main() -> None:
     args = parse_args()
@@ -234,12 +283,15 @@ def main() -> None:
         texts = [formatting_func({"text": text}) for text in examples["text"]]
         return tokenizer(
             texts,
-            truncation=True,
-            max_length=args.max_seq_length,
-            padding=False,
-            add_special_tokens=False,  # 我们在formatting_func中已经处理了格式
-        )
+            Loss 记录器和 Trainer
+    loss_recorder = LossRecorderCallback()
     
+    trainer = Trainer(
+        model=model,
+        args=training_args,
+        train_dataset=tokenized_dataset,
+        data_collator=data_collator,
+        callbacks=[loss_recorder]
     tokenized_dataset = dataset.map(
         tokenize_function,
         batched=True,
@@ -263,6 +315,15 @@ def main() -> None:
     # 7. 训练参数
     training_args = TrainingArguments(
         output_dir=str(args.output_dir),
+    
+    # 11. 绘制并保存 loss 曲线
+    print("\n生成 Loss 曲线图...")
+    plot_loss_curve(loss_recorder.training_losses, loss_recorder.steps, args.output_dir)
+    print(f"\n📊 训练摘要:")
+    if loss_recorder.training_losses:
+        print(f"  最小 Loss: {min(loss_recorder.training_losses):.4f}")
+        print(f"  最终 Loss: {loss_recorder.training_losses[-1]:.4f}")
+        print(f"  总训练步数: {len(loss_recorder.steps)}")
         per_device_train_batch_size=args.per_device_train_batch_size,
         gradient_accumulation_steps=args.gradient_accumulation_steps,
         learning_rate=args.learning_rate,
