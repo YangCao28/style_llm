@@ -65,6 +65,9 @@ class LossRecorderCallback(TrainerCallback):
         if logs and "loss" in logs:
             self.training_losses.append(logs["loss"])
             self.steps.append(state.global_step)
+            # 打印当前 step 的 loss，频率由 TrainingArguments.logging_steps 控制
+            if getattr(state, "is_world_process_zero", True):
+                print(f"[step {state.global_step}] loss = {logs['loss']:.4f}")
 
 
 def main():

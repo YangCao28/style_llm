@@ -76,6 +76,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--num_train_epochs", type=float, default=3.0)
     parser.add_argument("--max_seq_length", type=int, default=4096)
     parser.add_argument("--attn_impl", type=str, default="flash_attention_2")
+    # LoRA 相关超参，便于后续做 Alpha 增强训练
+    parser.add_argument("--lora_r", type=int, default=128)
+    parser.add_argument("--lora_alpha", type=int, default=256)
+    # 续跑用的 checkpoint 路径（可在 JSON config 里指定）
+    parser.add_argument("--resume_from_checkpoint", type=str, default=None)
 
     if config_args.config:
         if not config_args.config.exists():
@@ -267,8 +272,8 @@ def main() -> None:
     # 4. 应用LoRA
     print("\nApplying LoRA configuration")
     lora_config = LoraConfig(
-        r=128,
-        lora_alpha=256,
+        r=args.lora_r,
+        lora_alpha=args.lora_alpha,
         target_modules=["q_proj", "k_proj", "v_proj", "o_proj", "gate_proj", "up_proj", "down_proj"],
         lora_dropout=0.05,
         bias="none",
@@ -351,7 +356,7 @@ def main() -> None:
         data_collator=data_collator,
     )
     
-    # 9. 开始训练
+    # 9. 开始训练（如提供 resume_from_checkpoint，则从对应 checkpoint 续跑）
     if not args.streaming:
         effective_batch = args.per_device_train_batch_size * args.gradient_accumulation_steps
         print("\n" + "="*70)
@@ -368,7 +373,11 @@ def main() -> None:
         print(f"开始训练 Stage-1 风格注入（流式模式）")
         print("="*70 + "\n")
     
-    trainer.train()
+    if args.resume_from_checkpoint:
+        print(f"从 checkpoint 续跑: {args.resume_from_checkpoint}")
+        trainer.train(resume_from_checkpoint=args.resume_from_checkpoint)
+    else:
+        trainer.train()
     
     # 10. 保存模型和tokenizer
     print(f"\n保存模型到 {args.output_dir}")
