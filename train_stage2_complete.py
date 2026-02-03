@@ -413,16 +413,33 @@ def main():
     print(f"✓ Tokenization complete: {len(tokenized_dataset):,} samples")
     
     # 验证第一个样本
-    print("\n🔍 验证第一个样本的 labels:")
-    first_labels = tokenized_dataset[0]["labels"]
+    print("\n🔍 验证第一个样本的 tokenization:")
+    first_sample = tokenized_dataset[0]
+    first_input_ids = first_sample["input_ids"]
+    first_labels = first_sample["labels"]
+    
+    # 解码完整输入
+    full_text = tokenizer.decode([tid for tid in first_input_ids if tid != tokenizer.pad_token_id], skip_special_tokens=False)
+    print(f"\n完整输入文本（前500字符）:")
+    print(full_text[:500])
+    
+    # 解码 labels（只有这部分会被训练）
     valid_label_ids = [lid for lid in first_labels if lid != -100]
     if valid_label_ids:
         decoded_labels = tokenizer.decode(valid_label_ids, skip_special_tokens=False)
-        print(f"Labels preview (前200字符): {decoded_labels[:200]}")
-        if any(marker in decoded_labels.lower() for marker in ["<|im_start|>", "system", "user"]):
-            print("⚠️  WARNING: Labels 包含 role markers！")
+        print(f"\n✅ 训练的 labels（前300字符）:")
+        print(decoded_labels[:300])
+        
+        # 检查是否包含不该训练的内容
+        if any(marker in decoded_labels for marker in ["<|im_start|>system", "<|im_start|>user", "任务：", "要求："]):
+            print("\n❌ 错误：Labels 包含了 system/user prompt！")
+            print("   这会导致模型学会回显输入")
+        elif decoded_labels.strip().startswith("<|im_start|>"):
+            print("\n❌ 错误：Labels 以 <|im_start|> 开头，应该直接是内容")
         else:
-            print("✅ Labels 正确（只有回复内容 + <|im_end|>）")
+            print("\n✅ Labels 正确：只包含 assistant 回复内容")
+    else:
+        print("\n❌ 错误：没有有效的 labels！")
     
     if torch.cuda.is_available():
         torch.cuda.empty_cache()
