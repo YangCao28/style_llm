@@ -106,6 +106,12 @@ def parse_args() -> argparse.Namespace:
         default="sdpa",
         help="Attention impl for inference (sdpa, eager, or flash_attention_2).",
     )
+    parser.add_argument(
+        "--base_model_name",
+        type=str,
+        default=None,
+        help="Base model name for loading tokenizer if checkpoint doesn't have it (e.g., Qwen/Qwen2.5-8B-Base).",
+    )
     return parser.parse_args()
 
 
@@ -144,8 +150,57 @@ def main() -> None:
             print("✓ Tokenizer loaded from checkpoint")
         except (OSError, ValueError, ImportError) as e:
             print(f"⚠ Checkpoint 中没有 tokenizer，尝试从基础模型加载...")
-            # 从基础模型路径加载（Qwen2.5-Coder-7B-Base 或其他）
-            base_model_path = "Qwen/Qwen2.5-Coder-7B-Base"
+            
+            # 尝试多种方式找到基础模型
+            base_model_path = None
+            
+            # 1. 使用命令行参数
+            if args.base_model_name:
+                base_model_path = args.base_model_name
+                print(f"  使用命令行参数: {base_model_path}")
+            
+            # 2. 尝试从 config.json 读取 _name_or_path
+            if not base_model_path:
+                config_path = model_path / "config.json"
+                if config_path.exists():
+                    import json
+                    with open(config_path, "r") as f:
+                        config = json.load(f)
+                        base_model_path = config.get("_name_or_path")
+                        if base_model_path:
+                            print(f"  从 config.json 读取: {base_model_path}")
+            
+            # 3. 尝试从父目录或祖父目录找 Stage1 模型
+            if not base_model_path:
+                # stage2_instruction_tuning_corrected/checkpoint-16 -> stage1_style_injection
+                parent_dir = model_path.parent.parent
+                stage1_path = parent_dir / "stage1_style_injection"
+                if stage1_path.exists() and (stage1_path / "config.json").exists():
+                    with open(stage1_path / "config.json", "r") as f:
+                        config = json.load(f)
+                        base_model_path = config.get("_name_or_path")
+                        if base_model_path:
+                            print(f"  从 Stage1 config 读取: {base_model_path}")
+            
+            # 4. 使用常见的模型名称作为回退
+            if not base_model_path:
+                possible_models = [
+                    "Qwen/Qwen2.5-8B-Base",
+                    "Qwen/Qwen2.5-7B-Base",
+                    "Qwen/Qwen2-7B-Base",
+                ]
+                print("  尝试常见模型名称...")
+                for model_name in possible_models:
+                    print(f"    尝试: {model_name}")
+                    base_model_path = model_name
+                    break
+            
+            if not base_model_path:
+                raise ValueError(
+                    "无法确定基础模型名称。请使用 --base_model_name 参数指定，"
+                    "例如: --base_model_name Qwen/Qwen2.5-8B-Base"
+                )
+            
             print(f"  Loading tokenizer from: {base_model_path}")
             tokenizer = AutoTokenizer.from_pretrained(base_model_path)
         
