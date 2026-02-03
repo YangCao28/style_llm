@@ -36,10 +36,12 @@ def formatting_func_stage2_fixed(example, tokenizer, max_seq_length=2048):
     
     ✅ 正确做法：
       - input_ids: 包含完整对话（system + user + assistant 开头）
-      - labels: 只标注 assistant 的回复文本，其他部分设为 -100（忽略）
+      - labels: 只标注 assistant 的回复文本 + EOS，其他部分设为 -100（忽略）
+      - 强制在 assistant 回复结尾添加 <|im_end|> 作为明确的停止信号
     
     ❌ 错误做法（旧版）：
       - 整个文本都作为 label，导致模型学到 "继续对话" 的行为
+      - 没有强制 EOS token，导致模型不知道何时停止
     """
     conversations = example.get("conversations", [])
     if not conversations:
@@ -68,6 +70,10 @@ def formatting_func_stage2_fixed(example, tokenizer, max_seq_length=2048):
     if assistant_response is None:
         return {"input_ids": [], "attention_mask": [], "labels": []}
     
+    # 确保 assistant 回复不包含额外的后缀（如"改写完成"、"请参考"等）
+    # 清理可能的尾巴
+    assistant_response = assistant_response.strip()
+    
     # 使用 apply_chat_template 构建完整对话
     # 注意：我们需要先构建不包含 assistant 回复的 prompt，然后再加上 assistant 的部分
     prompt_messages = [m for m in messages if m["role"] != "assistant"]
@@ -79,14 +85,16 @@ def formatting_func_stage2_fixed(example, tokenizer, max_seq_length=2048):
     prompt_parts.append("<|im_start|>assistant\n")
     prompt_text = "\n".join(prompt_parts)
     
-    # 完整文本（包含 assistant 回复）
+    # 完整文本（包含 assistant 回复 + 强制的结束标记）
+    # 🔑 关键：确保 <|im_end|> 被包含在训练中，让模型学会"说完就停"
     full_text = prompt_text + assistant_response + "<|im_end|>"
     
     # Tokenize
     prompt_ids = tokenizer(prompt_text, add_special_tokens=False)["input_ids"]
     full_ids = tokenizer(full_text, truncation=True, max_length=max_seq_length, add_special_tokens=False)["input_ids"]
     
-    # 构建 labels：只有 assistant 回复部分是有效的，其他部分设为 -100
+    # 构建 labels：只有 assistant 回复部分（包括 <|im_end|>）是有效的，其他部分设为 -100
+    # 这样模型会学到：生成回复内容 → 输出 <|im_end|> → 停止
     labels = [-100] * len(prompt_ids) + full_ids[len(prompt_ids):]
     
     # Padding to max_length
