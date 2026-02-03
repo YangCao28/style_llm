@@ -159,7 +159,7 @@ def main() -> None:
                 base_model_path = args.base_model_name
                 print(f"  使用命令行参数: {base_model_path}")
             
-            # 2. 尝试从 config.json 读取 _name_or_path
+            # 2. 尝试从 config.json 读取 _name_or_path（可能是本地路径）
             if not base_model_path:
                 config_path = model_path / "config.json"
                 if config_path.exists():
@@ -169,40 +169,57 @@ def main() -> None:
                         base_model_path = config.get("_name_or_path")
                         if base_model_path:
                             print(f"  从 config.json 读取: {base_model_path}")
+                            # 如果是相对路径，转换为绝对路径
+                            if base_model_path and not base_model_path.startswith("/") and "/" not in base_model_path[:10]:
+                                base_model_path = str((model_path.parent / base_model_path).resolve())
             
-            # 3. 尝试从父目录或祖父目录找 Stage1 模型
+            # 3. 尝试从父目录或祖父目录找 Stage1 模型（本地路径）
             if not base_model_path:
                 # stage2_instruction_tuning_corrected/checkpoint-16 -> stage1_style_injection
                 parent_dir = model_path.parent.parent
-                stage1_path = parent_dir / "stage1_style_injection"
-                if stage1_path.exists() and (stage1_path / "config.json").exists():
-                    with open(stage1_path / "config.json", "r") as f:
-                        config = json.load(f)
-                        base_model_path = config.get("_name_or_path")
-                        if base_model_path:
-                            print(f"  从 Stage1 config 读取: {base_model_path}")
-            
-            # 4. 使用常见的模型名称作为回退
-            if not base_model_path:
-                possible_models = [
-                    "Qwen/Qwen2.5-8B-Base",
-                    "Qwen/Qwen2.5-7B-Base",
-                    "Qwen/Qwen2-7B-Base",
+                possible_stage1_paths = [
+                    parent_dir / "stage1_style_injection",
+                    parent_dir.parent / "stage1_style_injection",  # 再往上一层
                 ]
-                print("  尝试常见模型名称...")
-                for model_name in possible_models:
-                    print(f"    尝试: {model_name}")
-                    base_model_path = model_name
-                    break
+                for stage1_path in possible_stage1_paths:
+                    if stage1_path.exists():
+                        # 直接使用 Stage1 路径（包含 tokenizer）
+                        print(f"  找到 Stage1 模型: {stage1_path}")
+                        base_model_path = str(stage1_path.resolve())
+                        break
+            
+            # 4. 尝试查找本地 Qwen 模型目录
+            if not base_model_path:
+                # 常见的本地路径
+                possible_local_paths = [
+                    Path("/workspace/models/Qwen2.5-8B-Base"),
+                    Path("/workspace/models/Qwen2.5-7B-Base"),
+                    Path("./models/Qwen2.5-8B-Base"),
+                    Path("../models/Qwen2.5-8B-Base"),
+                ]
+                print("  尝试本地模型路径...")
+                for local_path in possible_local_paths:
+                    if local_path.exists() and (local_path / "tokenizer_config.json").exists():
+                        print(f"    找到: {local_path}")
+                        base_model_path = str(local_path.resolve())
+                        break
             
             if not base_model_path:
                 raise ValueError(
-                    "无法确定基础模型名称。请使用 --base_model_name 参数指定，"
-                    "例如: --base_model_name Qwen/Qwen2.5-8B-Base"
+                    "无法确定基础模型名称或路径。\n"
+                    "请使用 --base_model_name 参数指定本地路径或 HF 模型名称，\n"
+                    "例如: --base_model_name /workspace/models/Qwen2.5-8B-Base\n"
+                    "或者: --base_model_name stage1_style_injection"
                 )
             
             print(f"  Loading tokenizer from: {base_model_path}")
-            tokenizer = AutoTokenizer.from_pretrained(base_model_path)
+            # 尝试作为本地路径，如果失败则作为 HF 模型名称
+            try:
+                tokenizer = AutoTokenizer.from_pretrained(base_model_path, local_files_only=True)
+                print("  ✓ 从本地加载成功")
+            except Exception:
+                print("  ⚠ 本地加载失败，尝试从 HuggingFace...")
+                tokenizer = AutoTokenizer.from_pretrained(base_model_path)
         
         model_load_id = model_path
     else:
