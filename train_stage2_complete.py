@@ -62,14 +62,22 @@ class WeightedLossTrainer(Trainer):
             shift_labels.view(-1)
         )
         
-        # 应用权重
-        if loss_weight is not None:
-            shift_weight = loss_weight[..., 1:].contiguous()
-            loss = loss * shift_weight.view(-1)
-        
-        # 只对非 -100 的 token 计算平均 loss
+        # 只对非 -100 的 token 计算 loss
         mask = (shift_labels.view(-1) != -100).float()
-        loss = (loss * mask).sum() / mask.sum()
+        
+        # 应用权重（归一化以保持 loss 量级）
+        if loss_weight is not None:
+            shift_weight = loss_weight[..., 1:].contiguous().view(-1)
+            # 将权重归一化，使得加权平均等于原始平均
+            weight_with_mask = shift_weight * mask
+            weight_sum = weight_with_mask.sum()
+            if weight_sum > 0:
+                normalized_weight = weight_with_mask * mask.sum() / weight_sum
+                loss = (loss * normalized_weight).sum() / mask.sum()
+            else:
+                loss = (loss * mask).sum() / mask.sum()
+        else:
+            loss = (loss * mask).sum() / mask.sum()
         
         return (loss, outputs) if return_outputs else loss
 
