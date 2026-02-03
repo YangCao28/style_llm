@@ -41,7 +41,7 @@ import torch.nn.functional as F
 class WeightedLossTrainer(Trainer):
     """支持 per-token loss 权重的自定义 Trainer"""
     
-    def compute_loss(self, model, inputs, return_outputs=False):
+    def compute_loss(self, model, inputs, return_outputs=False, num_items_in_batch=None):
         """计算带权重的 loss"""
         # 提取权重（如果存在）
         loss_weight = inputs.pop("loss_weight", None)
