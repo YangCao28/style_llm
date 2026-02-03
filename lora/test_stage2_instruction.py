@@ -117,7 +117,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--max_new_tokens", type=int, default=2048)
     parser.add_argument("--temperature", type=float, default=0.7)
     parser.add_argument("--top_p", type=float, default=0.9)
-    parser.add_argument("--repetition_penalty", type=float, default=1.05)
+    parser.add_argument("--repetition_penalty", type=float, default=1.15)
     parser.add_argument("--seed", type=int, default=1234)
     parser.add_argument(
         "--attn_impl",
@@ -310,7 +310,7 @@ def main() -> None:
                 temperature=args.temperature,
                 top_p=args.top_p,
                 repetition_penalty=args.repetition_penalty,
-                pad_token_id=tokenizer.eos_token_id,
+                pad_token_id=tokenizer.pad_token_id,  # 🔑 使用正确的 pad_token
                 # Stop tokens to prevent unwanted continuation
                 eos_token_id=[
                     tokenizer.eos_token_id,
@@ -347,14 +347,16 @@ def main() -> None:
         print("=" * 80)
         
         # �🔑 清理输出：移除可能的 prompt 泄露和无关内容
-        # 1. 在第一个出现的 "任务："、"要求："、"原文："、"请直接输出" 等处截断
+        # 1. 截断于章节标题、提示语等
         stop_markers = [
             "\n任务：", "\n要求：", "\n原文：", 
             "\n请直接输出", "\n请在不", "\n禁止",
+            "\n请继续阅读", "\n第", "章",  # 章节标题
+            "aalborg",  # 训练数据污染
             "\nuser\n", "\nUser\n", 
             "\nsystem\n", "\nSystem\n",
             "\nassistant\n", "\nAssistant\n",
-            "<|im_start|>", "<|im_end|>",
+            "<|im_start|>",
         ]
         
         for marker in stop_markers:
