@@ -137,12 +137,24 @@ def main() -> None:
     # 优先当作本地目录使用；如果目录不存在，再回退为 HF 仓库名
     if model_path.exists():
         print(f"Loading Stage-2 model from local folder: {model_path}")
-        tokenizer = AutoTokenizer.from_pretrained(model_path)
+        
+        # 尝试从 checkpoint 加载 tokenizer，如果失败则从基础模型加载
+        try:
+            tokenizer = AutoTokenizer.from_pretrained(model_path)
+            print("✓ Tokenizer loaded from checkpoint")
+        except (OSError, ValueError, ImportError) as e:
+            print(f"⚠ Checkpoint 中没有 tokenizer，尝试从基础模型加载...")
+            # 从基础模型路径加载（Qwen2.5-Coder-7B-Base 或其他）
+            base_model_path = "Qwen/Qwen2.5-Coder-7B-Base"
+            print(f"  Loading tokenizer from: {base_model_path}")
+            tokenizer = AutoTokenizer.from_pretrained(base_model_path)
+        
         model_load_id = model_path
     else:
         print(f"⚠ 本地找不到目录: {model_path}，将尝试作为 Hugging Face 模型仓库加载。")
         model_load_id = args.model_name_or_path
         tokenizer = AutoTokenizer.from_pretrained(model_load_id)
+    
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
 
