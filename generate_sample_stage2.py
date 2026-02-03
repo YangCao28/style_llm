@@ -9,24 +9,26 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from tqdm import tqdm
 import time
 
-# 风格配置
+# 风格配置 - 使用通用文学特征描述
 STYLE_CONFIG = {
     "倪匡": {
-        "system": "你是倪匡式科幻作家，擅长将科学幻想与悬疑推理结合，文笔简洁明快，逻辑严密，善于制造悬念。",
-        "keywords": ["科幻", "悬疑", "卫斯理", "推理"],
+        "system": "你是一位专业的文学风格转换助手。你擅长将文本改写为：语言简洁明快、逻辑严密、节奏紧凑、善于营造氛围的叙事风格。",
+        "keywords": ["简洁", "紧凑", "氛围"],
         "dataset_pattern": r"disha.*72",
+        "style_description": "简洁紧凑风格"
     },
     "张恨水": {
-        "system": "你是民国时期的章回小说家，擅长张恨水、鸳鸯蝴蝶派的叙事风格。用词雅致，情节曲折，擅长描写世情人心。",
-        "keywords": ["民国", "章回体", "言情", "世情"],
+        "system": "你是一位专业的文学风格转换助手。你擅长将文本改写为：用词雅致古朴、情节委婉曲折、注重情感细节和人物心理的叙事风格。",
+        "keywords": ["雅致", "委婉", "细腻"],
         "dataset_pattern": r"zhang.*henshui",
+        "style_description": "雅致细腻风格"
     },
 }
 
 USER_PROMPT_TEMPLATES = [
-    "将这段白话文改写为{style}风格：\n{text}",
-    "用{style}的笔法重写这段话：\n{text}",
-    "请以{style}小说的文风改写：\n{text}",
+    "将这段文本改写为{style}：\n{text}",
+    "用{style}重写这段话：\n{text}",
+    "请以{style}改写：\n{text}",
 ]
 
 
@@ -86,7 +88,11 @@ def generate_stage2_sample(styled_text: str, plain_text: str, style: str) -> dic
     """生成训练样本 - 使用 conversations 格式（兼容 LLaMA Factory 等框架）"""
     config = STYLE_CONFIG[style]
     user_template = random.choice(USER_PROMPT_TEMPLATES)
-    user_prompt = user_template.format(style=style, text=plain_text)
+    # 使用 style_description 而不是 style（作家名字）
+    user_prompt = user_template.format(
+        style=config.get("style_description", style), 
+        text=plain_text
+    )
     
     return {
         "conversations": [
@@ -116,9 +122,10 @@ def process_single_sample(record, style, api_config):
 def main():
     import argparse
     parser = argparse.ArgumentParser()
-    parser.add_argument("--num_samples", type=int, default=5, help="生成样本数量")
+    parser.add_argument("--num_samples", type=int, default=5000, help="生成样本数量")
     parser.add_argument("--workers", type=int, default=10, help="并发线程数")
     parser.add_argument("--batch_size", type=int, default=100, help="每批保存数量")
+    parser.add_argument("--output", type=str, default="data/stage2_sample_5000.jsonl", help="输出文件路径")
     args = parser.parse_args()
     
     # 加载配置
@@ -201,8 +208,10 @@ def main():
     print(f"实际采样: {len(samples)} 条")
     
     # 输出文件
-    output_file = Path(f"data/stage2_sample_{args.num_samples}.jsonl")
-    summary_file = Path(f"data/stage2_sample_{args.num_samples}_summary.jsonl")
+    output_file = Path(args.output)
+    summary_file = Path(f"{output_file.stem}_summary.jsonl")
+    if output_file.parent != Path("."):
+        summary_file = output_file.parent / summary_file
     
     # 打开文件准备追加写入
     f_train = open(output_file, 'w', encoding='utf-8')
