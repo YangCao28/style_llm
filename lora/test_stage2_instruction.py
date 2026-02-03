@@ -315,12 +315,35 @@ def main() -> None:
             )
 
         completion = tokenizer.decode(output_ids[0], skip_special_tokens=True)
-        print("===== Assistant Reply =====")
-        # 简单做个切分：去掉提示部分，只看 assistant 段
+        
+        # 提取 assistant 回复
         if prompt in completion:
-            print(completion[len(prompt) :])
+            assistant_reply = completion[len(prompt):]
         else:
-            print(completion)
+            assistant_reply = completion
+        
+        # 🔑 清理输出：移除可能的 prompt 泄露和无关内容
+        # 1. 在第一个出现的 "任务："、"要求："、"原文："、"请直接输出" 等处截断
+        stop_markers = [
+            "\n任务：", "\n要求：", "\n原文：", 
+            "\n请直接输出", "\n请在不", "\n禁止",
+            "\nuser\n", "\nUser\n", 
+            "\nsystem\n", "\nSystem\n",
+            "\nassistant\n", "\nAssistant\n",
+            "<|im_start|>", "<|im_end|>",
+        ]
+        
+        for marker in stop_markers:
+            if marker in assistant_reply:
+                pos = assistant_reply.find(marker)
+                assistant_reply = assistant_reply[:pos]
+                break
+        
+        # 2. 去除结尾的不完整句子（如果以标点结束则保留）
+        assistant_reply = assistant_reply.strip()
+        
+        print("===== Assistant Reply =====")
+        print(assistant_reply)
 
 
 if __name__ == "__main__":
