@@ -318,21 +318,28 @@ def main() -> None:
                 ],
             )
 
-        completion = tokenizer.decode(output_ids[0], skip_special_tokens=True)
+        completion = tokenizer.decode(output_ids[0], skip_special_tokens=False)
         
         # 🔍 更多调试
         print(f"[DEBUG] Generated total: {output_ids.shape[1]} tokens")
         print(f"[DEBUG] New tokens: {output_ids.shape[1] - inputs['input_ids'].shape[1]}")
         print(f"[DEBUG] Completion length: {len(completion)} chars")
         print(f"[DEBUG] Completion starts with: {completion[:100]}")
+        print(f"[DEBUG] Has <|im_start|> in completion: {'<|im_start|>' in completion}")
         
-        # 提取 assistant 回复
-        if prompt in completion:
-            assistant_reply = completion[len(prompt):]
-            print(f"[DEBUG] Extracted by removing prompt, length: {len(assistant_reply)}")
+        # 提取 assistant 回复 - 寻找最后一个 <|im_start|>assistant
+        assistant_marker = "<|im_start|>assistant\n"
+        if assistant_marker in completion:
+            # 找到最后一个assistant标记
+            pos = completion.rfind(assistant_marker)
+            assistant_reply = completion[pos + len(assistant_marker):]
+            print(f"[DEBUG] Found assistant marker at position {pos}")
+            # 移除结尾的 <|im_end|> 如果有
+            if assistant_reply.endswith("<|im_end|>"):
+                assistant_reply = assistant_reply[:-len("<|im_end|>")]
         else:
             assistant_reply = completion
-            print(f"[DEBUG] Prompt not found in completion, using full completion")
+            print(f"[DEBUG] Assistant marker not found, using full completion")
         
         # � 显示原始输出（清理前）
         print("===== Raw Assistant Output (before cleaning) =====")
