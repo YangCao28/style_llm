@@ -322,7 +322,12 @@ def main() -> None:
         else:
             assistant_reply = completion
         
-        # 🔑 清理输出：移除可能的 prompt 泄露和无关内容
+        # � 显示原始输出（清理前）
+        print("===== Raw Assistant Output (before cleaning) =====")
+        print(assistant_reply[:500] if len(assistant_reply) > 500 else assistant_reply)
+        print("=" * 80)
+        
+        # �🔑 清理输出：移除可能的 prompt 泄露和无关内容
         # 1. 在第一个出现的 "任务："、"要求："、"原文："、"请直接输出" 等处截断
         stop_markers = [
             "\n任务：", "\n要求：", "\n原文：", 
