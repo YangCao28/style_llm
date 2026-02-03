@@ -297,6 +297,10 @@ def main() -> None:
         print("=" * 80)
 
         inputs = tokenizer(prompt, return_tensors="pt").to(model.device)
+        
+        # 🔍 调试信息
+        print(f"\n[DEBUG] Prompt length: {len(prompt)} chars, {inputs['input_ids'].shape[1]} tokens")
+        print(f"[DEBUG] Prompt ends with: ...{prompt[-100:]}")
 
         with torch.no_grad():
             output_ids = model.generate(
@@ -316,11 +320,19 @@ def main() -> None:
 
         completion = tokenizer.decode(output_ids[0], skip_special_tokens=True)
         
+        # 🔍 更多调试
+        print(f"[DEBUG] Generated total: {output_ids.shape[1]} tokens")
+        print(f"[DEBUG] New tokens: {output_ids.shape[1] - inputs['input_ids'].shape[1]}")
+        print(f"[DEBUG] Completion length: {len(completion)} chars")
+        print(f"[DEBUG] Completion starts with: {completion[:100]}")
+        
         # 提取 assistant 回复
         if prompt in completion:
             assistant_reply = completion[len(prompt):]
+            print(f"[DEBUG] Extracted by removing prompt, length: {len(assistant_reply)}")
         else:
             assistant_reply = completion
+            print(f"[DEBUG] Prompt not found in completion, using full completion")
         
         # � 显示原始输出（清理前）
         print("===== Raw Assistant Output (before cleaning) =====")
