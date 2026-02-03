@@ -48,9 +48,8 @@ ORIGINAL_TEXT = (
 )
 
 DEFAULT_USER = (
-    "用雅致细腻风格重写这段话：\n"
-    "原文：" + ORIGINAL_TEXT + "\n"
-    "请直接输出改写结果，不要有任何其他内容："
+    "用雅致细腻风格的笔法重写这段话：\n"
+    + ORIGINAL_TEXT
 )
 
 
