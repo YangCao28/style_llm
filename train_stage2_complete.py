@@ -46,32 +46,34 @@ class WeightedLossTrainer(Trainer):
         # 提取权重（如果存在）
         loss_weight = inputs.pop("loss_weight", None)
         
+        # 如果没有权重，使用父类的标准实现
+        if loss_weight is None or loss_weight[loss_weight != 1.0].numel() == 0:
+            return super().compute_loss(model, inputs, return_outputs, num_items_in_batch)
+        
         # 前向传播
         outputs = model(**inputs)
         logits = outputs.logits
         labels = inputs["labels"]
         
-        # 计算 loss
+        # Shift for causal LM: 预测下一个token
         shift_logits = logits[..., :-1, :].contiguous()
         shift_labels = labels[..., 1:].contiguous()
+        shift_weight = loss_weight[..., 1:].contiguous()
         
-        # 计算每个 token 的 loss（不做 reduction）
-        loss_fct = torch.nn.CrossEntropyLoss(reduction='none')
-        loss = loss_fct(
-            shift_logits.view(-1, shift_logits.size(-1)),
-            shift_labels.view(-1)
-        )
+        # Flatten
+        shift_logits = shift_logits.view(-1, shift_logits.size(-1))
+        shift_labels = shift_labels.view(-1)
+        shift_weight = shift_weight.view(-1)
         
-        # 只对非 -100 的 token 计算 loss
-        mask = (shift_labels.view(-1) != -100).float()
+        # 计算每个 token 的 loss
+        loss_fct = torch.nn.CrossEntropyLoss(reduction='none', ignore_index=-100)
+        loss_per_token = loss_fct(shift_logits, shift_labels)
         
-        # 应用权重：EOS token 贡献更多，但分母不变保持 loss 量级
-        if loss_weight is not None:
-            shift_weight = loss_weight[..., 1:].contiguous().view(-1)
-            # 加权loss总和 / 有效token数量（不是加权的token数量）
-            loss = (loss * shift_weight * mask).sum() / mask.sum()
-        else:
-            loss = (loss * mask).sum() / mask.sum()
+        # 应用权重并计算平均
+        weighted_loss = loss_per_token * shift_weight
+        # 只在非 -100 的位置求平均
+        valid_mask = (shift_labels != -100).float()
+        loss = (weighted_loss * valid_mask).sum() / valid_mask.sum()
         
         return (loss, outputs) if return_outputs else loss
 
@@ -346,9 +348,20 @@ def main():
     tokenizer = AutoTokenizer.from_pretrained(args.model_name_or_path, use_fast=True)
     tokenizer.padding_side = "right"
     tokenizer.model_max_length = args.max_seq_length
+    
+    # 确保 pad_token 和 eos_token 不同（重要！）
     if tokenizer.pad_token is None:
-        tokenizer.pad_token = tokenizer.eos_token
+        # 优先使用 unk_token，如果也没有则添加新的 pad_token
+        if tokenizer.unk_token is not None:
+            tokenizer.pad_token = tokenizer.unk_token
+        else:
+            tokenizer.add_special_tokens({'pad_token': '<|pad|>'})
+    
     print(f"✓ Tokenizer loaded")
+    print(f"  - EOS token: {tokenizer.eos_token} (id={tokenizer.eos_token_id})")
+    print(f"  - PAD token: {tokenizer.pad_token} (id={tokenizer.pad_token_id})")
+    if tokenizer.pad_token_id == tokenizer.eos_token_id:
+        print("  ⚠️  WARNING: pad_token_id == eos_token_id，这可能影响 EOS 预测！")
     
     # 3. 加载模型
     model = AutoModelForCausalLM.from_pretrained(
@@ -356,6 +369,12 @@ def main():
         torch_dtype=torch.bfloat16,
         attn_implementation=args.attn_impl,
     )
+    
+    # 如果添加了新的 special token，需要 resize embeddings
+    if len(tokenizer) > model.get_input_embeddings().weight.shape[0]:
+        model.resize_token_embeddings(len(tokenizer))
+        print(f"✓ Resized model embeddings to {len(tokenizer)}")
+    
     print(f"✓ Model loaded")
     
     # 4. 加载并处理数据集
@@ -432,16 +451,14 @@ def main():
         dataloader_drop_last=False,
     )
     
-    # 6. 创建 Trainer（临时使用标准 Trainer 调试 loss）
+    # 6. 创建 Trainer（使用自定义的 WeightedLossTrainer）
     loss_recorder = LossRecorderCallback()
-    trainer = Trainer(
+    trainer = WeightedLossTrainer(
         model=model,
         args=training_args,
         train_dataset=tokenized_dataset,
         callbacks=[loss_recorder],
     )
-    
-    print("⚠️  使用标准 Trainer（暂时禁用 EOS 权重）进行调试")
     
     # 7. 开始训练
     print("\n" + "=" * 80)

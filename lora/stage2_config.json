@@ -13,5 +13,5 @@
   "attn_impl": "sdpa",
   "lora_r": 128,
   "lora_alpha": 256,
-  "eos_loss_weight": 1.0
+  "eos_loss_weight": 3.0
 }
