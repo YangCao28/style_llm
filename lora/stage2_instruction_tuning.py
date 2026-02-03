@@ -1,9 +1,13 @@
-"""LoRA stage-2 (instruction tuning) training script.
+"""LoRA stage-2 (instruction tuning) training script with FIXED label segmentation.
+
+🔧 关键修复：
+  - Labels 只包含 assistant 的回复文本，不包含 system/user/assistant 标记
+  - 这样模型就不会学到"继续对话"的行为
 
 从 Stage 1 checkpoint 继续训练，使用对话格式的数据进行指令微调。
 
 Usage:
-    python -m lora.stage2_instruction_tuning --config lora/stage2_instruction_config.json
+    python -m lora.stage2_instruction_tuning_fixed --config lora/stage2_instruction_config.json
 """
 
 from __future__ import annotations
@@ -22,37 +26,79 @@ from transformers import (
     Trainer,
     TrainingArguments,
     TrainerCallback,
-    DataCollatorForLanguageModeling,
 )
 
 DEFAULT_SYSTEM_PROMPT = "你是一个文学创作助手，擅长用各种风格改写文本。"
 
 
-def formatting_func_stage2(example):
-    """格式化 stage2 对话数据为训练格式"""
+def formatting_func_stage2_fixed(example, tokenizer, max_seq_length=2048):
+    """格式化 stage2 对话数据 - 关键修复：labels 只包含 assistant 回复
+    
+    ✅ 正确做法：
+      - input_ids: 包含完整对话（system + user + assistant 开头）
+      - labels: 只标注 assistant 的回复文本，其他部分设为 -100（忽略）
+    
+    ❌ 错误做法（旧版）：
+      - 整个文本都作为 label，导致模型学到 "继续对话" 的行为
+    """
     conversations = example.get("conversations", [])
     if not conversations:
-        return {"text": ""}
+        return {"input_ids": [], "attention_mask": [], "labels": []}
     
-    # 构建对话格式
-    text_parts = []
+    # 构建完整的 prompt 和找到 assistant 的回复
+    messages = []
+    assistant_response = None
+    
     for msg in conversations:
-        # 兼容两种字段命名：{"role", "content"} 或 {"from", "value"}
+        # 兼容两种字段命名
         role = msg.get("role") or msg.get("from") or "user"
         content = msg.get("content") or msg.get("value") or ""
-
+        
         # 归一化角色名称
         if role in ("system", "sys"):
             norm_role = "system"
         elif role in ("assistant", "gpt", "bot"):
             norm_role = "assistant"
+            assistant_response = content  # 保存 assistant 的回复
         else:
-            # human / user / 其他一律当作 user 处理
             norm_role = "user"
-
-        text_parts.append(f"<|im_start|>{norm_role}\n{content}<|im_end|>")
+        
+        messages.append({"role": norm_role, "content": content})
     
-    return {"text": "\n".join(text_parts)}
+    if assistant_response is None:
+        return {"input_ids": [], "attention_mask": [], "labels": []}
+    
+    # 使用 apply_chat_template 构建完整对话
+    # 注意：我们需要先构建不包含 assistant 回复的 prompt，然后再加上 assistant 的部分
+    prompt_messages = [m for m in messages if m["role"] != "assistant"]
+    
+    # 手动构建（因为 Qwen 的 tokenizer 可能不支持 apply_chat_template）
+    prompt_parts = []
+    for msg in prompt_messages:
+        prompt_parts.append(f"<|im_start|>{msg['role']}\n{msg['content']}<|im_end|>")
+    prompt_parts.append("<|im_start|>assistant\n")
+    prompt_text = "\n".join(prompt_parts)
+    
+    # 完整文本（包含 assistant 回复）
+    full_text = prompt_text + assistant_response + "<|im_end|>"
+    
+    # Tokenize
+    prompt_ids = tokenizer(prompt_text, add_special_tokens=False)["input_ids"]
+    full_ids = tokenizer(full_text, truncation=True, max_length=max_seq_length, add_special_tokens=False)["input_ids"]
+    
+    # 构建 labels：只有 assistant 回复部分是有效的，其他部分设为 -100
+    labels = [-100] * len(prompt_ids) + full_ids[len(prompt_ids):]
+    
+    # Padding to max_length
+    input_ids = full_ids + [tokenizer.pad_token_id] * (max_seq_length - len(full_ids))
+    attention_mask = [1] * len(full_ids) + [0] * (max_seq_length - len(full_ids))
+    labels = labels + [-100] * (max_seq_length - len(labels))
+    
+    return {
+        "input_ids": input_ids[:max_seq_length],
+        "attention_mask": attention_mask[:max_seq_length],
+        "labels": labels[:max_seq_length],
+    }
 
 
 class LossRecorderCallback(TrainerCallback):
@@ -125,7 +171,7 @@ def main():
     args.output_dir.mkdir(parents=True, exist_ok=True)
     
     print("=" * 80)
-    print("Stage 2: Instruction Tuning")
+    print("Stage 2: Instruction Tuning (FIXED - Proper Label Segmentation)")
     print("=" * 80)
     print(f"Model checkpoint: {args.model_name_or_path}")
     print(f"Dataset: {args.dataset_path}")
@@ -133,6 +179,7 @@ def main():
     print(f"Batch size: {args.per_device_train_batch_size} × {args.gradient_accumulation_steps}")
     print(f"Learning rate: {args.learning_rate}")
     print(f"Epochs: {args.num_train_epochs}")
+    print("\n🔧 Key Fix: Labels only contain assistant response (no role markers)")
     
     # 2. 加载数据集
     print(f"\nLoading dataset from {args.dataset_path}")
@@ -157,33 +204,48 @@ def main():
     )
     print(f"✓ Model loaded (继续训练已有的 LoRA 权重)")
     
-    # 5. Tokenize 数据集
-    print("\nTokenizing dataset...")
+    # 5. Tokenize 数据集 - 使用修复后的格式化函数
+    print("\nTokenizing dataset with proper label segmentation...")
     def tokenize_function(examples):
         # 当 batched=True 时，examples 是字典，每个键对应一个列表
-        texts = []
-        num_samples = len(examples["conversations"])
+        results = {
+            "input_ids": [],
+            "attention_mask": [],
+            "labels": [],
+        }
         
+        num_samples = len(examples["conversations"])
         for i in range(num_samples):
             example = {key: examples[key][i] for key in examples}
-            formatted = formatting_func_stage2(example)
-            texts.append(formatted["text"])
+            formatted = formatting_func_stage2_fixed(example, tokenizer, args.max_seq_length)
+            
+            if formatted["input_ids"]:  # 只添加有效样本
+                results["input_ids"].append(formatted["input_ids"])
+                results["attention_mask"].append(formatted["attention_mask"])
+                results["labels"].append(formatted["labels"])
         
-        result = tokenizer(
-            texts,
-            truncation=True,
-            max_length=args.max_seq_length,
-            padding="max_length",
-        )
-        return result
+        return results
     
     tokenized_dataset = dataset.map(
         tokenize_function,
         batched=True,
-        batch_size=1000,
+        batch_size=100,
         remove_columns=dataset.column_names,
     )
     print(f"✓ Tokenization complete: {len(tokenized_dataset):,} samples")
+    
+    # 验证：打印第一个样本的 labels，确保没有 role markers
+    print("\n🔍 验证第一个样本的 labels (应该只包含 assistant 回复):")
+    first_labels = tokenized_dataset[0]["labels"]
+    # 找到第一个非 -100 的位置
+    valid_label_ids = [lid for lid in first_labels if lid != -100]
+    if valid_label_ids:
+        decoded_labels = tokenizer.decode(valid_label_ids, skip_special_tokens=False)
+        print(f"Labels preview (前200字符): {decoded_labels[:200]}")
+        if any(marker in decoded_labels.lower() for marker in ["<|im_start|>", "system", "user", "assistant"]):
+            print("⚠️  WARNING: Labels 包含 role markers！这会导致模型继续对话。")
+        else:
+            print("✅ Labels 看起来正确（只有回复内容）")
     
     # 清理一次显存（仅在有 CUDA 时）
     if torch.cuda.is_available():
@@ -210,20 +272,13 @@ def main():
         dataloader_drop_last=False,
     )
     
-    # 7. 创建 data collator
-    data_collator = DataCollatorForLanguageModeling(
-        tokenizer=tokenizer,
-        mlm=False,
-    )
-    
-    # 8. 创建 Trainer
+    # 7. 创建 Trainer（不需要 data_collator，因为我们已经做好了 padding）
     loss_recorder = LossRecorderCallback()
     
     trainer = Trainer(
         model=model,
         args=training_args,
         train_dataset=tokenized_dataset,
-        data_collator=data_collator,
         callbacks=[loss_recorder],
     )
     

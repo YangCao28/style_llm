@@ -32,6 +32,7 @@ from transformers import AutoModelForCausalLM, AutoTokenizer
 DEFAULT_SYSTEM = (
     "你是一个文学改写助手，只负责调整文风和措辞。"
     "改写时必须完整保留原文提供的全部信息，不得扩写情节，也不得删减内容。"
+    "你的回复必须在完成改写后立即结束，不得继续生成任何对话、提示或新任务。"
 )
 
 ORIGINAL_TEXT = (
@@ -95,7 +96,7 @@ def parse_args() -> argparse.Namespace:
         help="Optional file containing multiple user prompts. One JSONL per line with 'system'/'user', or plain text (one prompt per line).",
     )
     # 为了支持至少 ~100 字的输出，默认给得稍微长一点
-    parser.add_argument("--max_new_tokens", type=int, default=320)
+    parser.add_argument("--max_new_tokens", type=int, default=512)
     parser.add_argument("--temperature", type=float, default=0.7)
     parser.add_argument("--top_p", type=float, default=0.9)
     parser.add_argument("--repetition_penalty", type=float, default=1.05)
@@ -204,6 +205,11 @@ def main() -> None:
                 top_p=args.top_p,
                 repetition_penalty=args.repetition_penalty,
                 pad_token_id=tokenizer.eos_token_id,
+                # Stop tokens to prevent unwanted continuation
+                eos_token_id=[
+                    tokenizer.eos_token_id,
+                    tokenizer.convert_tokens_to_ids("<|im_end|>"),
+                ],
             )
 
         completion = tokenizer.decode(output_ids[0], skip_special_tokens=True)
