@@ -266,6 +266,7 @@ def main():
     # 配置参数（可以被配置文件覆盖）
     parser.add_argument("--model_name_or_path", type=str)
     parser.add_argument("--dataset_path", type=str)
+    parser.add_argument("--output_dir", type=str)
     parser.add_argument("--per_device_train_batch_size", type=int, default=8)
     parser.add_argument("--gradient_accumulation_steps", type=int, default=8)
     parser.add_argument("--learning_rate", type=float, default=5e-5)
