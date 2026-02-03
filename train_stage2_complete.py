@@ -349,19 +349,26 @@ def main():
     tokenizer.padding_side = "right"
     tokenizer.model_max_length = args.max_seq_length
     
-    # 确保 pad_token 和 eos_token 不同（重要！）
-    if tokenizer.pad_token is None:
-        # 优先使用 unk_token，如果也没有则添加新的 pad_token
-        if tokenizer.unk_token is not None:
+    # 🔑 确保 pad_token 和 eos_token 不同（重要！）
+    # 即使已有 pad_token，如果与 eos_token 相同也必须修复
+    if tokenizer.pad_token_id == tokenizer.eos_token_id:
+        # 优先使用 unk_token
+        if tokenizer.unk_token is not None and tokenizer.unk_token_id != tokenizer.eos_token_id:
             tokenizer.pad_token = tokenizer.unk_token
+            print(f"✓ 使用 unk_token 作为 pad_token")
         else:
+            # 添加新的 pad_token
             tokenizer.add_special_tokens({'pad_token': '<|pad|>'})
+            print(f"✓ 添加新的 pad_token: <|pad|>")
     
     print(f"✓ Tokenizer loaded")
     print(f"  - EOS token: {tokenizer.eos_token} (id={tokenizer.eos_token_id})")
     print(f"  - PAD token: {tokenizer.pad_token} (id={tokenizer.pad_token_id})")
     if tokenizer.pad_token_id == tokenizer.eos_token_id:
-        print("  ⚠️  WARNING: pad_token_id == eos_token_id，这可能影响 EOS 预测！")
+        print("  ❌ ERROR: pad_token_id == eos_token_id 仍然相同！")
+        raise ValueError("Failed to separate pad_token from eos_token")
+    else:
+        print("  ✅ pad_token 和 eos_token 已分离")
     
     # 3. 加载模型
     model = AutoModelForCausalLM.from_pretrained(
