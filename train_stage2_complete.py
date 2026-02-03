@@ -65,12 +65,11 @@ class WeightedLossTrainer(Trainer):
         # 只对非 -100 的 token 计算 loss
         mask = (shift_labels.view(-1) != -100).float()
         
-        # 标准的加权平均（不改变loss量级）
+        # 应用权重：EOS token 贡献更多，但分母不变保持 loss 量级
         if loss_weight is not None:
             shift_weight = loss_weight[..., 1:].contiguous().view(-1)
-            # 只在有效token上应用权重
-            weighted_loss = loss * shift_weight * mask
-            loss = weighted_loss.sum() / (shift_weight * mask).sum()
+            # 加权loss总和 / 有效token数量（不是加权的token数量）
+            loss = (loss * shift_weight * mask).sum() / mask.sum()
         else:
             loss = (loss * mask).sum() / mask.sum()
         
