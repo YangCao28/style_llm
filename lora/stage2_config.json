@@ -1,9 +1,9 @@
 {
   "model_name_or_path": "stage1_style_injection/checkpoint-531",
-  "dataset_path": "data/stage2_sample_5000_v2.jsonl",
-  "output_dir": "stage2_instruction_tuning",
-  "per_device_train_batch_size": 1,
-  "gradient_accumulation_steps": 64,
+  "dataset_path": "data/stage2_zhang_5000_cleaned.jsonl",
+  "output_dir": "stage2_zhang_style",
+  "per_device_train_batch_size": 2,
+  "gradient_accumulation_steps": 32,
   "learning_rate": 1e-4,
   "warmup_steps": 10,
   "num_train_epochs": 1.0,
@@ -13,5 +13,5 @@
   "attn_impl": "sdpa",
   "lora_r": 128,
   "lora_alpha": 256,
-  "eos_loss_weight": 3.0
+  "eos_loss_weight": 2
 }
