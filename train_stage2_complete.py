@@ -305,6 +305,12 @@ def main():
     args.output_dir = Path(args.output_dir)
     args.output_dir.mkdir(parents=True, exist_ok=True)
     
+    # 清理 GPU 缓存
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
+        torch.cuda.synchronize()
+        print("✓ GPU 缓存已清理")
+    
     print("=" * 80)
     print("Stage 2: 一键式指令微调训练")
     print("=" * 80)
