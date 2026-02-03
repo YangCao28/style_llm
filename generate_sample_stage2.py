@@ -139,8 +139,24 @@ def main():
             used_ids = set(line.strip() for line in f if line.strip())
         print(f"已加载 {len(used_ids)} 条已使用的数据 ID")
     
-    # 读取数据
-    input_file = Path("data/dataset/combined_dataset_uniform.jsonl")
+    # 读取数据 - 尝试多个可能的文件路径
+    possible_files = [
+        Path("data/dataset/combined_dataset_uniform.jsonl"),
+        Path("data/dataset/combined_dataset.jsonl"),
+    ]
+    
+    input_file = None
+    for file_path in possible_files:
+        if file_path.exists():
+            input_file = file_path
+            print(f"使用输入文件: {input_file}")
+            break
+    
+    if input_file is None:
+        print("错误：找不到输入数据文件！")
+        print(f"已尝试的路径: {[str(p) for p in possible_files]}")
+        return
+    
     style_records = {style: [] for style in STYLE_CONFIG.keys()}  # 按风格分类
     
     with open(input_file, 'r', encoding='utf-8') as f:
