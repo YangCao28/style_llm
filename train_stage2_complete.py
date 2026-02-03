@@ -432,14 +432,16 @@ def main():
         dataloader_drop_last=False,
     )
     
-    # 6. 创建 Trainer（使用自定义的 WeightedLossTrainer）
+    # 6. 创建 Trainer（临时使用标准 Trainer 调试 loss）
     loss_recorder = LossRecorderCallback()
-    trainer = WeightedLossTrainer(
+    trainer = Trainer(
         model=model,
         args=training_args,
         train_dataset=tokenized_dataset,
         callbacks=[loss_recorder],
     )
+    
+    print("⚠️  使用标准 Trainer（暂时禁用 EOS 权重）进行调试")
     
     # 7. 开始训练
     print("\n" + "=" * 80)
