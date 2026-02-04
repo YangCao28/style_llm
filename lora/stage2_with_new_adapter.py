@@ -31,7 +31,7 @@ from transformers import (
 )
 
 
-def formatting_func_stage2(example, tokenizer, max_seq_length=2048):
+def formatting_func_stage2(example, tokenizer, max_seq_length=2048, debug=False):
     """格式化对话数据 - 只对 assistant 回复计算 loss
     
     正确方法：分别tokenize prompt和assistant，然后拼接并构建labels
@@ -97,6 +97,23 @@ def formatting_func_stage2(example, tokenizer, max_seq_length=2048):
     input_ids = input_ids + [tokenizer.pad_token_id] * padding_length
     attention_mask = [1] * len(input_ids[:max_seq_length - padding_length]) + [0] * padding_length
     labels = labels + [-100] * (max_seq_length - len(labels))
+    
+    # Debug打印第一个样本
+    if debug:
+        print("\n" + "="*80)
+        print("🔍 DEBUG: formatting_func_stage2 第一个样本详情")
+        print("="*80)
+        print(f"\n📝 Prompt文本 ({len(prompt_ids)} tokens):")
+        print(f"  {prompt_text[:200]}...")
+        print(f"\n✅ Assistant文本 ({len(assistant_ids)} tokens):")
+        print(f"  {assistant_text[:200]}...")
+        print(f"\n📊 统计:")
+        print(f"  Prompt tokens: {len(prompt_ids)}")
+        print(f"  Assistant tokens: {len(assistant_ids)}")
+        print(f"  Total tokens: {len(input_ids[:max_seq_length-padding_length])}")
+        print(f"  Labels中-100数量: {sum(1 for l in labels if l == -100)}")
+        print(f"  Labels中有效数量: {sum(1 for l in labels if l != -100)}")
+        print("="*80 + "\n")
     
     return {
         "input_ids": input_ids[:max_seq_length],
@@ -253,6 +270,14 @@ def main():
     
     # Tokenize 数据集
     print("\nTokenizing dataset...")
+    
+    # 先处理第一个样本用于debug
+    first_example = {key: [dataset[0][key]] for key in dataset[0].keys()}
+    print("\n" + "="*80)
+    print("🔍 处理第一个样本 (debug mode)")
+    print("="*80)
+    formatting_func_stage2(dataset[0], tokenizer, args.max_seq_length, debug=True)
+    
     def tokenize_function(examples):
         results = {
             "input_ids": [],
@@ -280,17 +305,37 @@ def main():
     )
     print(f"✓ Tokenization complete: {len(tokenized_dataset):,} samples")
     
-    # 验证第一个样本
+    # 验证第一个样本 - 详细检查labels
     print("\n🔍 验证 labels（应只包含 assistant 回复）:")
-    first_labels = tokenized_dataset[0]["labels"]
+    first_sample = tokenized_dataset[0]
+    first_labels = first_sample["labels"]
+    first_input_ids = first_sample["input_ids"]
+    
+    # 统计有效labels（不是-100的）
     valid_label_ids = [lid for lid in first_labels if lid != -100]
+    ignored_count = sum(1 for lid in first_labels if lid == -100)
+    
+    print(f"📊 Labels统计:")
+    print(f"  Total tokens: {len(first_labels)}")
+    print(f"  Ignored (-100): {ignored_count} ({100*ignored_count/len(first_labels):.1f}%)")
+    print(f"  Valid (计算loss): {len(valid_label_ids)} ({100*len(valid_label_ids)/len(first_labels):.1f}%)")
+    
     if valid_label_ids:
         decoded = tokenizer.decode(valid_label_ids, skip_special_tokens=False)
-        print(f"Labels preview: {decoded[:150]}...")
+        print(f"\n✅ Valid labels内容 (前200字符):")
+        print(f"  {decoded[:200]}...")
         if any(m in decoded.lower() for m in ["<|im_start|>system", "<|im_start|>user"]):
             print("⚠️  WARNING: Labels 包含 system/user 标记！")
-        else:
-            print("✅ Labels 正确")
+    else:
+        print("❌ ERROR: 没有有效的labels！")
+    
+    # 检查input_ids
+    print(f"\n📝 完整input示例 (前200字符):")
+    decoded_input = tokenizer.decode([iid for iid in first_input_ids if iid != tokenizer.pad_token_id], skip_special_tokens=False)
+    print(f"  {decoded_input[:200]}...")
+    
+    if len(valid_label_ids) < 10:
+        print(f"\n⚠️  WARNING: 有效labels太少 ({len(valid_label_ids)} tokens)，可能导致loss异常！")
     
     if torch.cuda.is_available():
         torch.cuda.empty_cache()
