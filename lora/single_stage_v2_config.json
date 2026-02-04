@@ -1,6 +1,7 @@
 {
   "base_model_name": "Qwen3-8B-Base",
   "dataset_path": "data/split/train_8000.jsonl",
+  "validation_dataset_path": "data/split/test_1000.jsonl",
   "output_dir": "single_stage_v2",
   
   "lora_r": 64,

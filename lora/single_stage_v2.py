@@ -119,14 +119,23 @@ def formatting_func_with_soft_mask(example, tokenizer, max_seq_length=2048, soft
 class LossRecorderCallback(TrainerCallback):
     def __init__(self):
         self.training_losses = []
+        self.eval_losses = []
         self.steps = []
+        self.eval_steps = []
     
     def on_log(self, args, state, control, logs=None, **kwargs):
-        if logs and "loss" in logs:
-            self.training_losses.append(logs["loss"])
-            self.steps.append(state.global_step)
-            if getattr(state, "is_world_process_zero", True):
-                print(f"[step {state.global_step}] loss = {logs['loss']:.4f}")
+        if logs:
+            if "loss" in logs:
+                self.training_losses.append(logs["loss"])
+                self.steps.append(state.global_step)
+                if getattr(state, "is_world_process_zero", True):
+                    print(f"[step {state.global_step}] train_loss = {logs['loss']:.4f}")
+            
+            if "eval_loss" in logs:
+                self.eval_losses.append(logs["eval_loss"])
+                self.eval_steps.append(state.global_step)
+                if getattr(state, "is_world_process_zero", True):
+                    print(f"[step {state.global_step}] eval_loss = {logs['eval_loss']:.4f}")
 
 
 def main():
@@ -149,12 +158,14 @@ def main():
     
     base_model_name = config["base_model_name"]
     dataset_path = config["dataset_path"]
+    validation_dataset_path = config.get("validation_dataset_path")  # 可选验证集
     output_dir = config["output_dir"]
     soft_mask_ratio = config.get("soft_mask_ratio", 0.2)  # 默认20%
     
     print(f"\n🔧 配置:")
     print(f"  Base Model: {base_model_name}")
     print(f"  Dataset: {dataset_path}")
+    print(f"  Validation: {validation_dataset_path or 'None'}")
     print(f"  Output: {output_dir}")
     print(f"  Soft Mask Ratio: {soft_mask_ratio:.1%} ({'混合屏蔽' if 0 < soft_mask_ratio < 1 else '全量学习' if soft_mask_ratio == 1 else 'Hard Mask'})")
     print(f"  Learning Rate: {config.get('learning_rate', 4e-5)}")
@@ -226,19 +237,41 @@ def main():
     formatted_dataset = formatted_dataset.filter(lambda x: len(x["input_ids"]) > 0)
     print(f"✓ 格式化完成: {len(formatted_dataset)} 条有效样本")
     
+    # 加载验证集（如果提供）
+    formatted_eval_dataset = None
+    if validation_dataset_path:
+        print(f"\n📊 加载验证集: {validation_dataset_path}")
+        eval_dataset = load_dataset("json", data_files=validation_dataset_path, split="train")
+        print(f"✓ 加载 {len(eval_dataset)} 条验证样本")
+        
+        formatted_eval_dataset = eval_dataset.map(
+            format_fn,
+            remove_columns=eval_dataset.column_names,
+            num_proc=1,
+            desc="Formatting validation set"
+        )
+        formatted_eval_dataset = formatted_eval_dataset.filter(lambda x: len(x["input_ids"]) > 0)
+        print(f"✓ 验证集格式化完成: {len(formatted_eval_dataset)} 条有效样本")
+    
     # 训练参数
+    eval_steps = config.get("eval_steps", config.get("logging_steps", 10))  # 默认与logging_steps相同
     training_args = TrainingArguments(
         output_dir=output_dir,
         num_train_epochs=config.get("num_train_epochs", 2.0),
         per_device_train_batch_size=config.get("per_device_train_batch_size", 4),
+        per_device_eval_batch_size=config.get("per_device_eval_batch_size", 4),
         gradient_accumulation_steps=config.get("gradient_accumulation_steps", 4),
         learning_rate=config.get("learning_rate", 4e-5),
         lr_scheduler_type=config.get("lr_scheduler_type", "cosine"),
         warmup_ratio=config.get("warmup_ratio", 0.1),
         logging_steps=config.get("logging_steps", 10),
+        eval_strategy="steps" if formatted_eval_dataset else "no",
+        eval_steps=eval_steps if formatted_eval_dataset else None,
         save_strategy="steps",
         save_steps=config.get("save_steps", 200),
         save_total_limit=3,
+        load_best_model_at_end=True if formatted_eval_dataset else False,
+        metric_for_best_model="eval_loss" if formatted_eval_dataset else None,
         bf16=True,
         gradient_checkpointing=True,
         dataloader_num_workers=4,
@@ -253,6 +286,7 @@ def main():
         model=model,
         args=training_args,
         train_dataset=formatted_dataset,
+        eval_dataset=formatted_eval_dataset,
         callbacks=[loss_recorder],
     )
     
@@ -274,12 +308,34 @@ def main():
     # 显示训练曲线
     if loss_recorder.training_losses:
         print(f"\n📊 训练统计:")
-        print(f"  初始 loss: {loss_recorder.training_losses[0]:.4f}")
-        print(f"  最终 loss: {loss_recorder.training_losses[-1]:.4f}")
-        print(f"  Loss 下降: {loss_recorder.training_losses[0] - loss_recorder.training_losses[-1]:.4f}")
+        print(f"  初始 train_loss: {loss_recorder.training_losses[0]:.4f}")
+        print(f"  最终 train_loss: {loss_recorder.training_losses[-1]:.4f}")
+        print(f"  Train Loss 下降: {loss_recorder.training_losses[0] - loss_recorder.training_losses[-1]:.4f}")
+        
+        if loss_recorder.eval_losses:
+            print(f"  初始 eval_loss: {loss_recorder.eval_losses[0]:.4f}")
+            print(f"  最终 eval_loss: {loss_recorder.eval_losses[-1]:.4f}")
+            print(f"  Eval Loss 下降: {loss_recorder.eval_losses[0] - loss_recorder.eval_losses[-1]:.4f}")
+    
+    # 保存loss曲线到JSON文件
+    loss_history = {
+        "train": {
+            "steps": loss_recorder.steps,
+            "losses": loss_recorder.training_losses
+        },
+        "eval": {
+            "steps": loss_recorder.eval_steps,
+            "losses": loss_recorder.eval_losses
+        }
+    }
+    
+    loss_file = Path(output_dir) / "loss_history.json"
+    with open(loss_file, 'w', encoding='utf-8') as f:
+        json.dump(loss_history, f, indent=2, ensure_ascii=False)
     
     print(f"\n✓ 训练完成！")
     print(f"  📁 模型保存到: {output_dir}")
+    print(f"  📊 Loss曲线保存到: {loss_file}")
 
 
 if __name__ == "__main__":
