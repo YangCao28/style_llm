@@ -437,10 +437,19 @@ def main():
         if assistant_marker in completion:
             pos = completion.rfind(assistant_marker)
             reply = completion[pos + len(assistant_marker):]
+            # 移除结束标记
             if reply.endswith("<|im_end|>"):
                 reply = reply[:-len("<|im_end|>")]
+            elif "<|im_end|>" in reply:
+                reply = reply[:reply.rfind("<|im_end|>")]
+            # 移除 <|endoftext|> 标记
+            if "<|endoftext|>" in reply:
+                reply = reply[:reply.find("<|endoftext|>")]
         else:
             reply = completion
+        
+        # 清理开头可能的多余内容（如 "好的，请稍候片刻"等）
+        reply = reply.strip()
         
         print(reply)
 
