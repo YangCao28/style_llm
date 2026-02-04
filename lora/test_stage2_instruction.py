@@ -141,6 +141,14 @@ def build_chat_prompt(system: str, user: str) -> str:
       <|im_start|>assistant\n
     Here we stop before closing the assistant block so generation continues it.
     """
+    parts = []
+    parts.append(f"<|im_start|>system\n{system}<|im_end|>")
+    parts.append(f"<|im_start|>user\n{user}<|im_end|>")
+    parts.append("<|im_start|>assistant\n")
+    return "\n".join(parts)
+
+
+def main():
     args = parse_args()
     
     torch.manual_seed(args.seed)
