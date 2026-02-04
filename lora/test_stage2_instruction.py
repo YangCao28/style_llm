@@ -28,6 +28,7 @@ from pathlib import Path
 
 import torch
 from transformers import AutoModelForCausalLM, AutoTokenizer
+from peft import PeftModel
 
 DEFAULT_SYSTEM = (
     "你是一名优雅的文学改写作家，擅长把现代白话润色成更讲究、更有韵味的华美文本。要求：\n"
@@ -98,7 +99,7 @@ def parse_args() -> argparse.Namespace:
         "--base_model_name",
         type=str,
         default=None,
-        help="Base model name for loading tokenizer if checkpoint doesn't have it (e.g., Qwen/Qwen2.5-8B-Base).",
+        help="Base model name for loading tokenizer if checkpoint doesn't have it (e.g., Qwen/Qwen3-8B-Base).",
     )
     return parser.parse_args()
 
@@ -180,10 +181,10 @@ def main() -> None:
             if not base_model_path:
                 # 常见的本地路径
                 possible_local_paths = [
+                    Path("/workspace/models/Qwen3-8B-Base"),
                     Path("/workspace/models/Qwen2.5-8B-Base"),
-                    Path("/workspace/models/Qwen2.5-7B-Base"),
-                    Path("./models/Qwen2.5-8B-Base"),
-                    Path("../models/Qwen2.5-8B-Base"),
+                    Path("./models/Qwen3-8B-Base"),
+                    Path("../models/Qwen3-8B-Base"),
                 ]
                 print("  尝试本地模型路径...")
                 for local_path in possible_local_paths:
@@ -196,7 +197,7 @@ def main() -> None:
                 raise ValueError(
                     "无法确定基础模型名称或路径。\n"
                     "请使用 --base_model_name 参数指定本地路径或 HF 模型名称，\n"
-                    "例如: --base_model_name /workspace/models/Qwen2.5-8B-Base\n"
+                    "例如: --base_model_name /workspace/models/Qwen3-8B-Base\n"
                     "或者: --base_model_name stage1_style_injection"
                 )
             
@@ -218,13 +219,75 @@ def main() -> None:
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
 
-    model = AutoModelForCausalLM.from_pretrained(
-        model_load_id,
-        torch_dtype=torch.bfloat16,
-        device_map="auto",
-        attn_implementation=args.attn_impl,
-    )
+    # 🔑 检查是否是 LoRA checkpoint（包含 adapter_config.json）
+    is_lora_checkpoint = (model_path / "adapter_config.json").exists() if model_path.exists() else False
+    
+    if is_lora_checkpoint:
+        print(f"\n✓ 检测到 LoRA checkpoint")
+        
+        # 读取 adapter_config.json 获取 base_model_name_or_path
+        adapter_config_path = model_path / "adapter_config.json"
+        with open(adapter_config_path, "r", encoding="utf-8") as f:
+            adapter_config = json.load(f)
+        
+        base_model_name = adapter_config.get("base_model_name_or_path")
+        if not base_model_name:
+            # 如果配置中没有，尝试从命令行参数获取
+            base_model_name = args.base_model_name
+        
+        if not base_model_name:
+            raise ValueError(
+                "LoRA checkpoint 需要指定 base model。\n"
+                "请使用 --base_model_name 参数，例如：\n"
+                "  --base_model_name Qwen/Qwen3-8B-Base\n"
+                "或者：\n"
+                "  --base_model_name /path/to/base/model"
+            )
+        
+        print(f"  Base model: {base_model_name}")
+        print(f"  Loading base model...")
+        
+        # 1. 加载 base model
+        base_model = AutoModelForCausalLM.from_pretrained(
+            base_model_name,
+            torch_dtype=torch.bfloat16,
+            device_map="auto",
+            attn_implementation=args.attn_impl,
+        )
+        
+        print(f"  ✓ Base model loaded")
+        print(f"  Loading LoRA adapters from {model_path}...")
+        
+        # 2. 加载 LoRA adapters
+        model = PeftModel.from_pretrained(
+            base_model,
+            model_load_id,
+            torch_dtype=torch.bfloat16,
+        )
+        
+        # 检查是否有多个 adapters
+        if hasattr(model, 'peft_config'):
+            adapter_names = list(model.peft_config.keys())
+            print(f"  ✓ Loaded adapters: {adapter_names}")
+            
+            # 如果有多个 adapters，确保都启用
+            if len(adapter_names) > 1:
+                print(f"  Enabling all adapters for inference...")
+                # 注意：PEFT 默认会启用所有 adapters
+        else:
+            print(f"  ✓ LoRA adapter loaded")
+    else:
+        print(f"\n✓ 加载完整模型（非 LoRA）")
+        # 直接加载完整模型
+        model = AutoModelForCausalLM.from_pretrained(
+            model_load_id,
+            torch_dtype=torch.bfloat16,
+            device_map="auto",
+            attn_implementation=args.attn_impl,
+        )
+    
     model.eval()
+    print(f"\n✓ Model ready for inference")
     # 根据 preset 或手动 system/user 构造一个或多个测试用例
     test_cases = []
 
