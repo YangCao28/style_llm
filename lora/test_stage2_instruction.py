@@ -319,38 +319,21 @@ def main() -> None:
 
     for idx, (system, user) in enumerate(test_cases, start=1):
         prompt = build_chat_prompt(system, user)
-        print("\n" + "=" * 80)
-        print(f"Test case #{idx}")
-        # print("----- System -----")
-        # print(system)
-        # print("----- User -----")
-        # print(user)
-        # print("----- Raw Prompt (truncated) -----")
-        # print(prompt[:400] + ("..." if len(prompt) > 400 else ""))
         print("=" * 80)
+        print(f"Test #{idx}")
+        print("=" * 80 + "\n")
 
         inputs = tokenizer(prompt, return_tensors="pt").to(model.device)
         
-        # 🔍 调试信息
-        print(f"\n[DEBUG] Prompt length: {len(prompt)} chars, {inputs['input_ids'].shape[1]} tokens")
-        print(f"[DEBUG] Prompt ends with: ...{prompt[-100:]}")
-        
-        # 🔑 正确配置停止token
+        # 配置停止 tokens
         stop_token_ids = [tokenizer.eos_token_id]
-        
-        # 添加 <|im_end|> 和 <|im_start|> 作为停止token
         im_end_id = tokenizer.convert_tokens_to_ids("<|im_end|>")
         im_start_id = tokenizer.convert_tokens_to_ids("<|im_start|>")
         
-        if im_end_id is not None and im_end_id != tokenizer.unk_token_id:
+        if im_end_id and im_end_id != tokenizer.unk_token_id:
             stop_token_ids.append(im_end_id)
-            print(f"[DEBUG] Added <|im_end|> as stop token (id={im_end_id})")
-        
-        if im_start_id is not None and im_start_id != tokenizer.unk_token_id:
+        if im_start_id and im_start_id != tokenizer.unk_token_id:
             stop_token_ids.append(im_start_id)
-            print(f"[DEBUG] Added <|im_start|> as stop token (id={im_start_id})")
-        
-        print(f"[DEBUG] Stop token IDs: {stop_token_ids}")
 
         with torch.no_grad():
             output_ids = model.generate(
@@ -361,66 +344,22 @@ def main() -> None:
                 top_p=args.top_p,
                 repetition_penalty=args.repetition_penalty,
                 pad_token_id=tokenizer.pad_token_id,
-                eos_token_id=stop_token_ids,  # 使用配置好的停止token列表
+                eos_token_id=stop_token_ids,
             )
 
         completion = tokenizer.decode(output_ids[0], skip_special_tokens=False)
         
-        # 🔍 更多调试
-        print(f"[DEBUG] Generated total: {output_ids.shape[1]} tokens")
-        print(f"[DEBUG] New tokens: {output_ids.shape[1] - inputs['input_ids'].shape[1]}")
-        print(f"[DEBUG] Completion length: {len(completion)} chars")
-        print(f"[DEBUG] Completion starts with: {completion[:100]}")
-        print(f"[DEBUG] Has <|im_start|> in completion: {'<|im_start|>' in completion}")
-        
-        # 提取 assistant 回复 - 寻找最后一个 <|im_start|>assistant
+        # 提取 assistant 回复
         assistant_marker = "<|im_start|>assistant\n"
         if assistant_marker in completion:
-            # 找到最后一个assistant标记
             pos = completion.rfind(assistant_marker)
-            assistant_reply = completion[pos + len(assistant_marker):]
-            print(f"[DEBUG] Found assistant marker at position {pos}")
-            # 移除结尾的 <|im_end|> 如果有
-            if assistant_reply.endswith("<|im_end|>"):
-                assistant_reply = assistant_reply[:-len("<|im_end|>")]
+            reply = completion[pos + len(assistant_marker):]
+            if reply.endswith("<|im_end|>"):
+                reply = reply[:-len("<|im_end|>")]
         else:
-            assistant_reply = completion
-            print(f"[DEBUG] Assistant marker not found, using full completion")
+            reply = completion
         
-        # � 显示原始输出（清理前）
-        print("===== Raw Assistant Output (before cleaning) =====")
-        print(assistant_reply[:500] if len(assistant_reply) > 500 else assistant_reply)
-        print("=" * 80)
-        
-        # 🔑 清理输出：移除可能的 prompt 泄露和无关内容
-        # 1. 截断于明确的系统提示语（不包括会误伤的"第"、"章"等）
-        stop_markers = [
-            "\n任务：", "\n要求：", "\n原文：", 
-            "\n请直接输出", "\n请将以下", "\n禁止",
-            "\n原始文本", "\n现代白话",
-            "\nuser\n", "\nUser\n", 
-            "\nsystem\n", "\nSystem\n",
-            "\nassistant\n", "\nAssistant\n",
-            "<|im_start|>",
-        ]
-        
-        for marker in stop_markers:
-            if marker in assistant_reply:
-                pos = assistant_reply.find(marker)
-                assistant_reply = assistant_reply[:pos]
-                print(f"[DEBUG] Truncated at marker: {repr(marker)}")
-                break
-        
-        # 2. 检测异常重复模式（连续相同字符超过50个）
-        import re
-        if re.search(r'(.)\\1{50,}', assistant_reply):
-            print("[WARNING] Detected abnormal repetition pattern!")
-        
-        # 3. 去除结尾的不完整句子
-        assistant_reply = assistant_reply.strip()
-        
-        print("===== Assistant Reply =====")
-        print(assistant_reply)
+        print(reply)
 
 
 if __name__ == "__main__":
