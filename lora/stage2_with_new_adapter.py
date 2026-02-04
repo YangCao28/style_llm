@@ -104,9 +104,9 @@ def formatting_func_stage2(example, tokenizer, max_seq_length=2048, debug=False)
         print("🔍 DEBUG: formatting_func_stage2 第一个样本详情")
         print("="*80)
         print(f"\n📝 Prompt文本 ({len(prompt_ids)} tokens):")
-        print(f"  {prompt_text[:200]}...")
+        print(prompt_text)
         print(f"\n✅ Assistant文本 ({len(assistant_ids)} tokens):")
-        print(f"  {assistant_text[:200]}...")
+        print(assistant_text)
         print(f"\n📊 统计:")
         print(f"  Prompt tokens: {len(prompt_ids)}")
         print(f"  Assistant tokens: {len(assistant_ids)}")
@@ -314,25 +314,47 @@ def main():
     # 统计有效labels（不是-100的）
     valid_label_ids = [lid for lid in first_labels if lid != -100]
     ignored_count = sum(1 for lid in first_labels if lid == -100)
+    padding_count = sum(1 for iid in first_input_ids if iid == tokenizer.pad_token_id)
     
     print(f"📊 Labels统计:")
     print(f"  Total tokens: {len(first_labels)}")
     print(f"  Ignored (-100): {ignored_count} ({100*ignored_count/len(first_labels):.1f}%)")
     print(f"  Valid (计算loss): {len(valid_label_ids)} ({100*len(valid_label_ids)/len(first_labels):.1f}%)")
+    print(f"  Padding tokens: {padding_count}")
+    
+    # 🔑 关键检查：验证labels和input_ids的对应关系
+    print(f"\n🔑 关键验证: Labels与Input_ids对应关系")
+    non_pad_count = sum(1 for iid in first_input_ids if iid != tokenizer.pad_token_id)
+    print(f"  Input有效tokens: {non_pad_count}")
+    print(f"  Labels有效tokens: {len(valid_label_ids)}")
+    
+    # 找到第一个非-100的label位置
+    first_valid_idx = next((i for i, l in enumerate(first_labels) if l != -100), -1)
+    if first_valid_idx >= 0:
+        print(f"  第一个有效label位置: {first_valid_idx}")
+        print(f"  该位置的input_id: {first_input_ids[first_valid_idx]}")
+        print(f"  该位置的label: {first_labels[first_valid_idx]}")
+        
+        # 检查是否match
+        if first_input_ids[first_valid_idx] == first_labels[first_valid_idx]:
+            print(f"  ⚠️  WARNING: input_id == label，这意味着在当前token位置predict当前token！")
+            print(f"  ⚠️  应该是input[i] predict label[i+1]才对（Trainer会自动shift）")
+        else:
+            print(f"  ✓ input_id != label (这是正常的)")
     
     if valid_label_ids:
         decoded = tokenizer.decode(valid_label_ids, skip_special_tokens=False)
-        print(f"\n✅ Valid labels内容 (前200字符):")
-        print(f"  {decoded[:200]}...")
+        print(f"\n✅ Valid labels内容:")
+        print(decoded)
         if any(m in decoded.lower() for m in ["<|im_start|>system", "<|im_start|>user"]):
             print("⚠️  WARNING: Labels 包含 system/user 标记！")
     else:
         print("❌ ERROR: 没有有效的labels！")
     
     # 检查input_ids
-    print(f"\n📝 完整input示例 (前200字符):")
+    print(f"\n📝 完整input示例:")
     decoded_input = tokenizer.decode([iid for iid in first_input_ids if iid != tokenizer.pad_token_id], skip_special_tokens=False)
-    print(f"  {decoded_input[:200]}...")
+    print(decoded_input)
     
     if len(valid_label_ids) < 10:
         print(f"\n⚠️  WARNING: 有效labels太少 ({len(valid_label_ids)} tokens)，可能导致loss异常！")
