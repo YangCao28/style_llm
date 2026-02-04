@@ -110,7 +110,7 @@ def main():
     # 解析参数
     parser = argparse.ArgumentParser()
     parser.add_argument("--config", type=Path, help="Path to JSON config file")
-    parser.add_argument("--base_model_name", type=str, help="Base model path (e.g., Qwen/Qwen3-8B-Base)")
+    parser.add_argument("--base_model_name", type=str, help="Base model path (local folder or HF path)")
     parser.add_argument("--stage1_adapter_path", type=str, help="Stage1 LoRA adapter path")
     parser.add_argument("--dataset_path", type=str)
     parser.add_argument("--output_dir", type=str)
@@ -156,7 +156,7 @@ def main():
     print(f"Output: {args.output_dir}")
     print(f"New adapter rank: {args.lora_r}, alpha: {args.lora_alpha}")
     print("\n🔑 Strategy:")
-    print("  1. Load pure base model (Qwen3-8B-Base)")
+    print("  1. Load pure base model")
     print("  2. Load Stage1 style adapter (FROZEN)")
     print("  3. Add new instruct adapter (TRAINABLE)")
     print("  4. Both adapters active during inference")
@@ -200,7 +200,14 @@ def main():
         target_modules=["q_proj", "k_proj", "v_proj", "o_proj", "gate_proj", "up_proj", "down_proj"],
         lora_dropout=0.05,
         bias="none",
-        task_4：冻结 style adapter，只训练 instruct adapter
+        task_type="CAUSAL_LM",
+    )
+    
+    # 添加新的 adapter
+    model.add_adapter("instruct", lora_config)
+    print(f"✓ Instruct adapter added (trainable)")
+    
+    # 🔑 关键步骤4：冻结 style adapter，只训练 instruct adapter
     print(f"\n🔒 Step 4: Freezing style adapter, training instruct only...")
     
     # 列出所有 adapters
@@ -209,7 +216,7 @@ def main():
         for name in model.peft_config.keys():
             print(f"  - {name}")
     
-    # 设置只训练 instruct adapter
+    # 设置当前活跃的 adapter 为 "instruct"
     model.set_adapter("instruct")
     
     # 冻结 style adapter 的参数
@@ -218,16 +225,7 @@ def main():
             param.requires_grad = False
             
     print(f"✓ Style adapter: FROZEN (but active during forward)")
-    print(f"✓ Instruct adapter: TRAINABLE
-    if hasattr(model, 'peft_config'):
-        for name in model.peft_config.keys():
-            print(f"  - {name}")
-    
-    # 设置当前活跃的 adapter 为 "instruct"
-    if hasattr(model, 'set_adapter'):
-        model.set_adapter("instruct")
-        print(f"✓ Active adapter: instruct (trainable)")
-        print(f"  Other adapters remain frozen but active during forward pass")
+    print(f"✓ Instruct adapter: TRAINABLE (active)")
     
     # 验证：检查哪些参数是可训练的
     trainable_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
@@ -317,25 +315,36 @@ def main():
     
     trainer.train()
     
-    # 保存最终模型（会保存所有 adapters）
-    print("\nSaving final model...")
-    trainer.save_model()
+    # 🔑 关键：只保存 instruct adapter（不保存 style adapter）
+    print("\n💾 Saving ONLY instruct adapter (NOT style)...")
+    
+    # 方法1：直接保存 instruct adapter
+    model.save_pretrained(
+        args.output_dir,
+        selected_adapters=["instruct"],  # 只保存 instruct adapter
+    )
     tokenizer.save_pretrained(args.output_dir)
     
     # 保存 adapter 配置信息
     adapter_info = {
-        "base_model": args.model_name_or_path,
-        "stage1_adapter": "style (frozen during stage2)",
-        "stage2_adapter": "instruct (trained)",
-        "inference": "Both adapters active, enable both during generation",
+        "base_model": args.base_model_name,
+        "stage1_style_adapter": str(args.stage1_adapter_path),
+        "stage2_instruct_adapter": "instruct (this folder)",
+        "usage": "Load base model + stage1 style adapter + this instruct adapter for inference",
+        "inference_command": f"--style_adapter {args.stage1_adapter_path} --instruct_adapter {args.output_dir}",
     }
     with open(args.output_dir / "adapter_info.json", "w", encoding="utf-8") as f:
         json.dump(adapter_info, f, indent=2, ensure_ascii=False)
     
     print(f"\n✓ Training complete!")
-    print(f"  Model saved to: {args.output_dir}")
-    print(f"  Contains TWO adapters: style + instruct")
+    print(f"  📁 Instruct adapter saved to: {args.output_dir}")
+    print(f"  📁 Style adapter remains at: {args.stage1_adapter_path}")
+    print(f"\n🎯 For inference, use BOTH adapters:")
+    print(f"  python -m lora.test_stage2_instruction \\")
+    print(f"    --style_adapter {args.stage1_adapter_path} \\")
+    print(f"    --instruct_adapter {args.output_dir}")
     if loss_recorder.training_losses:
+        print(f"\n📊 Training stats:")
         print(f"  Initial loss: {loss_recorder.training_losses[0]:.4f}")
         print(f"  Final loss: {loss_recorder.training_losses[-1]:.4f}")
     
