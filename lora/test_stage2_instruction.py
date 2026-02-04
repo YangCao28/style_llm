@@ -1,23 +1,33 @@
 """Quick smoke test for Stage-2 instruction-tuned checkpoints.
 
-Loads a Stage-2 checkpoint (which already includes the Stage-1 LoRA),
-feeds a system+user conversation, and prints the assistant reply so you
-can visually inspect whether the instruction style and literary style
-look correct.
+Three testing modes (determined by provided arguments):
+
+1. Base Model Mode:
+   --base_model <path>
+
+2. Single LoRA Mode:
+   --lora_model <path>
+
+3. Dual LoRA Mode (Stacked Adapters):
+   --style_adapter <path> --instruct_adapter <path>
 
 Usage examples:
 
-    # Test the main Stage-2 run
-    python -m lora.test_stage2_instruction \
-        --model_name_or_path stage2_instruction_tuning
+    # Test base model
+    python -m lora.test_stage2_instruction --base_model Qwen3-8B-Base
 
-    # Or test a specific checkpoint
-    python -m lora.test_stage2_instruction \
-        --model_name_or_path stage2_instruction_tuning/checkpoint-158
+    # Test Stage1 (style only)
+    python -m lora.test_stage2_instruction --lora_model stage1_style_injection/checkpoint-531
 
-    # Or test the alpha-enhanced run
+    # Test Stage2 (style + instruct stacked)
     python -m lora.test_stage2_instruction \
-        --model_name_or_path stage2_instruction_alpha
+        --style_adapter stage1_style_injection/checkpoint-531 \
+        --instruct_adapter stage2_instruct_new_adapter
+
+    # Override base model detection
+    python -m lora.test_stage2_instruction \
+        --base_model /path/to/Qwen3-8B-Base \
+        --lora_model stage1_style_injection/checkpoint-531
 """
 
 from __future__ import annotations
@@ -63,12 +73,34 @@ PRESET_CASES = {
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Test Stage-2 instruction-tuned checkpoint")
+    
+    # 模型路径参数（根据提供的参数自动判断模式）
     parser.add_argument(
-        "--model_name_or_path",
+        "--base_model",
         type=str,
-        required=True,
-        help="Path to the Stage-2 checkpoint folder (or HF repo id).",
+        default=None,
+        help="Base model path (e.g., Qwen3-8B-Base). If only this is provided, test pure base model.",
     )
+    parser.add_argument(
+        "--lora_model",
+        type=str,
+        default=None,
+        help="Single LoRA adapter path (e.g., stage1_style_injection/checkpoint-531)",
+    )
+    parser.add_argument(
+        "--style_adapter",
+        type=str,
+        default=None,
+        help="Style adapter path (e.g., stage1_style_injection/checkpoint-531). Use with --instruct_adapter for dual mode.",
+    )
+    parser.add_argument(
+        "--instruct_adapter",
+        type=str,
+        default=None,
+        help="Instruct adapter path (e.g., stage2_instruct_new_adapter). Use with --style_adapter for dual mode.",
+    )
+    
+    # 测试参数
     parser.add_argument("--system", type=str, default=DEFAULT_SYSTEM, help="System prompt.")
     parser.add_argument("--user", type=str, default=DEFAULT_USER, help="User message.")
     parser.add_argument(
@@ -84,23 +116,19 @@ def parse_args() -> argparse.Namespace:
         default=None,
         help="Optional file containing multiple user prompts. One JSONL per line with 'system'/'user', or plain text (one prompt per line).",
     )
-    # 根据训练数据分布（最长918字≈512 tokens），设置合理的默认值
-    parser.add_argument("--max_new_tokens", type=int, default=512)  # 匹配训练数据长度
+    
+    # 生成参数
+    parser.add_argument("--max_new_tokens", type=int, default=512)
     parser.add_argument("--temperature", type=float, default=0.3)
     parser.add_argument("--top_p", type=float, default=0.85)
-    parser.add_argument("--repetition_penalty", type=float, default=1.5)  # 提高惩罚避免重复
+    parser.add_argument("--repetition_penalty", type=float, default=1.5)
     parser.add_argument("--seed", type=int, default=1234)
     parser.add_argument(
         "--attn_impl",
         default="sdpa",
         help="Attention impl for inference (sdpa, eager, or flash_attention_2).",
     )
-    parser.add_argument(
-        "--base_model_name",
-        type=str,
-        default=None,
-        help="Base model name for loading tokenizer if checkpoint doesn't have it (e.g., Qwen/Qwen3-8B-Base).",
-    )
+    
     return parser.parse_args()
 
 
@@ -113,141 +141,54 @@ def build_chat_prompt(system: str, user: str) -> str:
       <|im_start|>assistant\n
     Here we stop before closing the assistant block so generation continues it.
     """
-
-    parts = [
-        f"<|im_start|>system\n{system}<|im_end|>",
-        f"<|im_start|>user\n{user}<|im_end|>",
-        "<|im_start|>assistant\n",
-    ]
-    return "\n".join(parts)
-
-
-def main() -> None:
     args = parse_args()
+    
     torch.manual_seed(args.seed)
-
-    model_path = Path(args.model_name_or_path)
-    print(f"model_name_or_path = {args.model_name_or_path}")
-
-    # 优先当作本地目录使用；如果目录不存在，再回退为 HF 仓库名
-    if model_path.exists():
-        print(f"Loading Stage-2 model from local folder: {model_path}")
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed_all(args.seed)
+    
+    # 🔑 根据提供的参数自动判断模式
+    # 判断逻辑：
+    # 1. style_adapter + instruct_adapter -> 双adapter模式
+    # 2. lora_model -> 单adapter模式
+    # 3. base_model (且无其他adapter) -> 基座模式
+    # 4. 否则 -> 参数错误
+    
+    if args.style_adapter and args.instruct_adapter:
+        # 双 LoRA 模式：分别加载 style 和 instruct adapters
+        print(f"Mode: Dual LoRA (Stacked Adapters)\n")
+        print(f"Style adapter:    {args.style_adapter}")
+        print(f"Instruct adapter: {args.instruct_adapter}")
         
-        # 尝试从 checkpoint 加载 tokenizer，如果失败则从基础模型加载
-        try:
-            tokenizer = AutoTokenizer.from_pretrained(model_path)
-            print("✓ Tokenizer loaded from checkpoint")
-        except (OSError, ValueError, ImportError) as e:
-            print(f"⚠ Checkpoint 中没有 tokenizer，尝试从基础模型加载...")
-            
-            # 尝试多种方式找到基础模型
-            base_model_path = None
-            
-            # 1. 使用命令行参数
-            if args.base_model_name:
-                base_model_path = args.base_model_name
-                print(f"  使用命令行参数: {base_model_path}")
-            
-            # 2. 尝试从 config.json 读取 _name_or_path（可能是本地路径）
-            if not base_model_path:
-                config_path = model_path / "config.json"
-                if config_path.exists():
-                    import json
-                    with open(config_path, "r") as f:
+        # 获取 base model（优先级：--base_model > adapter config > 当前目录）
+        base_model_name = args.base_model
+        if not base_model_name:
+            style_config_path = Path(args.style_adapter) / "adapter_config.json"
+            if style_config_path.exists():
+                try:
+                    with open(style_config_path, "r", encoding="utf-8") as f:
                         config = json.load(f)
-                        base_model_path = config.get("_name_or_path")
-                        if base_model_path:
-                            print(f"  从 config.json 读取: {base_model_path}")
-                            # 如果是相对路径，转换为绝对路径
-                            if base_model_path and not base_model_path.startswith("/") and "/" not in base_model_path[:10]:
-                                base_model_path = str((model_path.parent / base_model_path).resolve())
-            
-            # 3. 尝试从父目录或祖父目录找 Stage1 模型（本地路径）
-            if not base_model_path:
-                # stage2_instruction_tuning_corrected/checkpoint-16 -> stage1_style_injection
-                parent_dir = model_path.parent.parent
-                possible_stage1_paths = [
-                    parent_dir / "stage1_style_injection",
-                    parent_dir.parent / "stage1_style_injection",  # 再往上一层
-                ]
-                for stage1_path in possible_stage1_paths:
-                    if stage1_path.exists():
-                        # 直接使用 Stage1 路径（包含 tokenizer）
-                        print(f"  找到 Stage1 模型: {stage1_path}")
-                        base_model_path = str(stage1_path.resolve())
-                        break
-            
-            # 4. 尝试查找本地 Qwen 模型目录
-            if not base_model_path:
-                # 常见的本地路径
-                possible_local_paths = [
-                    Path("/workspace/models/Qwen3-8B-Base"),
-                    Path("/workspace/models/Qwen2.5-8B-Base"),
-                    Path("./models/Qwen3-8B-Base"),
-                    Path("../models/Qwen3-8B-Base"),
-                ]
-                print("  尝试本地模型路径...")
-                for local_path in possible_local_paths:
-                    if local_path.exists() and (local_path / "tokenizer_config.json").exists():
-                        print(f"    找到: {local_path}")
-                        base_model_path = str(local_path.resolve())
-                        break
-            
-            if not base_model_path:
+                    base_model_name = config.get("base_model_name_or_path")
+                    if base_model_name:
+                        print(f"Base: {base_model_name} (from style adapter config)")
+                except Exception as e:
+                    print(f"⚠️  Failed to read style adapter config: {e}")
+        
+        if not base_model_name:
+            default_base = Path("Qwen3-8B-Base")
+            if default_base.exists():
+                base_model_name = str(default_base)
+                print(f"Base: {base_model_name} (auto-detected in current dir)")
+            else:
                 raise ValueError(
-                    "无法确定基础模型名称或路径。\n"
-                    "请使用 --base_model_name 参数指定本地路径或 HF 模型名称，\n"
-                    "例如: --base_model_name /workspace/models/Qwen3-8B-Base\n"
-                    "或者: --base_model_name stage1_style_injection"
+                    "❌ Cannot determine base model.\n"
+                    "Use --base_model Qwen3-8B-Base"
                 )
-            
-            print(f"  Loading tokenizer from: {base_model_path}")
-            # 尝试作为本地路径，如果失败则作为 HF 模型名称
-            try:
-                tokenizer = AutoTokenizer.from_pretrained(base_model_path, local_files_only=True)
-                print("  ✓ 从本地加载成功")
-            except Exception:
-                print("  ⚠ 本地加载失败，尝试从 HuggingFace...")
-                tokenizer = AutoTokenizer.from_pretrained(base_model_path)
-        
-        model_load_id = model_path
-    else:
-        print(f"⚠ 本地找不到目录: {model_path}，将尝试作为 Hugging Face 模型仓库加载。")
-        model_load_id = args.model_name_or_path
-        tokenizer = AutoTokenizer.from_pretrained(model_load_id)
-    
-    if tokenizer.pad_token is None:
-        tokenizer.pad_token = tokenizer.eos_token
-
-    # 🔑 检查是否是 LoRA checkpoint（包含 adapter_config.json）
-    is_lora_checkpoint = (model_path / "adapter_config.json").exists() if model_path.exists() else False
-    
-    if is_lora_checkpoint:
-        print(f"\n✓ 检测到 LoRA checkpoint")
-        
-        # 读取 adapter_config.json 获取 base_model_name_or_path
-        adapter_config_path = model_path / "adapter_config.json"
-        with open(adapter_config_path, "r", encoding="utf-8") as f:
-            adapter_config = json.load(f)
-        
-        base_model_name = adapter_config.get("base_model_name_or_path")
-        if not base_model_name:
-            # 如果配置中没有，尝试从命令行参数获取
-            base_model_name = args.base_model_name
-        
-        if not base_model_name:
-            raise ValueError(
-                "LoRA checkpoint 需要指定 base model。\n"
-                "请使用 --base_model_name 参数，例如：\n"
-                "  --base_model_name Qwen/Qwen3-8B-Base\n"
-                "或者：\n"
-                "  --base_model_name /path/to/base/model"
-            )
-        
-        print(f"  Base model: {base_model_name}")
-        print(f"  Loading base model...")
-        
-        # 1. 加载 base model
+        else:
+            if args.base_model:
+                print(f"Base: {base_model_name}")
+        # 加载 tokenizer 和 base model
+        tokenizer = AutoTokenizer.from_pretrained(base_model_name, use_fast=True)
         base_model = AutoModelForCausalLM.from_pretrained(
             base_model_name,
             torch_dtype=torch.bfloat16,
@@ -255,39 +196,173 @@ def main() -> None:
             attn_implementation=args.attn_impl,
         )
         
-        print(f"  ✓ Base model loaded")
-        print(f"  Loading LoRA adapters from {model_path}...")
-        
-        # 2. 加载 LoRA adapters
+        # 🔑 加载第一个 adapter (style)
         model = PeftModel.from_pretrained(
             base_model,
-            model_load_id,
+            args.style_adapter,
+            adapter_name="style",
+            torch_dtype=torch.bfloat16
+        )
+        print(f"✓ Loaded style adapter")
+        
+        # 🔑 加载第二个 adapter (instruct)
+        model.load_adapter(args.instruct_adapter, adapter_name="instruct")
+        print(f"✓ Loaded instruct adapter")
+        
+        # 显示叠加信息
+        adapters = list(model.peft_config.keys())
+        print(f"\n🔗 Stacking adapters:")
+        for adapter_name in adapters:
+            print(f"  ✓ {adapter_name}")
+        print(f"\n✓ All adapters will be stacked during inference")
+        print(f"  Formula: W = W_base + ΔW_style + ΔW_instruct")
+    
+    elif args.lora_model:
+        # 单 LoRA 模式
+        print(f"Mode: Single LoRA\n")
+        print(f"LoRA: {args.lora_model}")
+        
+        # 优先顺序：--base_model > adapter_config.json > 当前目录
+        base_model_name = args.base_model
+        
+        if not base_model_name:
+            # 从 adapter_config.json 读取
+            adapter_config_path = Path(args.lora_model) / "adapter_config.json"
+            if adapter_config_path.exists():
+                try:
+                    with open(adapter_config_path, "r", encoding="utf-8") as f:
+                        adapter_config = json.load(f)
+                    base_model_name = adapter_config.get("base_model_name_or_path")
+                    if base_model_name:
+                        print(f"Base: {base_model_name} (from adapter_config.json)")
+                except Exception as e:
+                    print(f"⚠️  Failed to read adapter_config.json: {e}")
+        
+        if not base_model_name:
+            default_base = Path("Qwen3-8B-Base")
+            if default_base.exists():
+                base_model_name = str(default_base)
+                print(f"Base: {base_model_name} (auto-detected in current dir)")
+            else:
+                raise ValueError(
+                    "❌ Cannot determine base model.\n"
+                    "Solutions:\n"
+                    "  1. Use --base_model Qwen3-8B-Base\n"
+                    "  2. Ensure Qwen3-8B-Base exists in current directory\n"
+                    "  3. Make sure adapter_config.json contains base_model_name_or_path"
+                )
+        else:
+            if args.base_model:
+                print(f"Base: {base_model_name}")
+        
+        # 加载 tokenizer
+        tokenizer = AutoTokenizer.from_pretrained(base_model_name, use_fast=True)
+        
+        # 加载 base model
+        base_model = AutoModelForCausalLM.from_pretrained(
+            base_model_name,
             torch_dtype=torch.bfloat16,
+            device_map="auto",
+            attn_implementation=args.attn_impl,
         )
         
-        # 检查是否有多个 adapters
+        # 加载 LoRA adapter
+        model = PeftModel.from_pretrained(base_model, str(args.lora_model), torch_dtype=torch.bfloat16)
+        
+        # 检查加载的 adapters
         if hasattr(model, 'peft_config'):
-            adapter_names = list(model.peft_config.keys())
-            print(f"  ✓ Loaded adapters: {adapter_names}")
-            
-            # 如果有多个 adapters，确保都启用
-            if len(adapter_names) > 1:
-                print(f"  Enabling all adapters for inference...")
-                # 注意：PEFT 默认会启用所有 adapters
+            adapters = list(model.peft_config.keys())
+            if adapters:
+                print(f"Adapter: {adapters[0]}")
+                print(f"✓ Single adapter mode")
+            else:
+                print("⚠️  No adapters found in peft_config")
         else:
-            print(f"  ✓ LoRA adapter loaded")
-    else:
-        print(f"\n✓ 加载完整模型（非 LoRA）")
-        # 直接加载完整模型
+            print("⚠️  Model does not have peft_config attribute")
+    
+    elif args.base_model:
+        # 基座模型模式
+        print(f"Mode: Base Model\n")
+        print(f"Model: {args.base_model}")
+        
+        base_model_name = args.base_model
+        
+        # 尝试当前文件夹
+        model_path = Path(base_model_name)
+        if not model_path.exists():
+            local_base = Path("Qwen3-8B-Base")
+            if local_base.exists():
+                base_model_name = str(local_base)
+                print(f"(Using: {base_model_name})")
+        
+        tokenizer = AutoTokenizer.from_pretrained(base_model_name, use_fast=True)
         model = AutoModelForCausalLM.from_pretrained(
-            model_load_id,
+            base_model_name,
             torch_dtype=torch.bfloat16,
             device_map="auto",
             attn_implementation=args.attn_impl,
         )
     
+    else:
+        # 参数错误
+        raise ValueError(
+            "❌ Invalid arguments. Must provide one of:\n"
+            "  1. --base_model <path>                          (test base model)\n"
+            "  2. --lora_model <path>                          (test single adapter)\n"
+            "  3. --style_adapter <path> --instruct_adapter <path>  (test dual adapters)\n"
+            "\nExamples:\n"
+            "  python -m lora.test_stage2_instruction --base_model Qwen3-8B-Base\n"
+            "  python -m lora.test_stage2_instruction --lora_model stage1_style_injection/checkpoint-531\n"
+            "  python -m lora.test_stage2_instruction --style_adapter stage1_style_injection/checkpoint-531 --instruct_adapter stage2_instruct_new_adapter"
+        )
+        
+        # 加载 LoRA adapters（会自动加载该目录下的所有 adapters）
+        model = PeftModel.from_pretrained(base_model, str(model_path), torch_dtype=torch.bfloat16)
+        
+        # 🔑 检查加载的 adapters
+        if hasattr(model, 'peft_config'):
+            adapters = list(model.peft_config.keys())
+            if adapters:
+                print(f"Adapters: {adapters}")
+                
+                # 如果有多个 adapters，说明是 Stage2（style + instruct 叠加）
+                if len(adapters) > 1:
+                    print(f"\n🔗 Stacking adapters:")
+                    for adapter_name in adapters:
+                        print(f"  ✓ {adapter_name}")
+                    
+                    # PEFT 默认行为：所有 adapters 自动叠加（相加）
+                    # W_final = W_base + ΔW_adapter1 + ΔW_adapter2 + ...
+                    print(f"\n✓ All adapters will be stacked during inference")
+                    print(f"  Formula: W = W_base + ΔW_{adapters[0]}" + 
+                          "".join(f" + ΔW_{a}" for a in adapters[1:]))
+                else:
+                    print(f"✓ Single adapter mode")
+            else:
+                print("⚠️  No adapters found in peft_config")
+        else:
+            print("⚠️  Model does not have peft_config attribute")
+        # 尝试当前文件夹
+        if not model_path.exists():
+            local_base = Path("Qwen3-8B-Base")
+            if local_base.exists():
+                model_path = local_base
+                print(f"(Using: {model_path})")
+        
+        tokenizer = AutoTokenizer.from_pretrained(str(model_path), use_fast=True)
+        model = AutoModelForCausalLM.from_pretrained(
+            str(model_path),
+            torch_dtype=torch.bfloat16,
+            device_map="auto",
+            attn_implementation=args.attn_impl,
+        )
+    
+    if tokenizer.pad_token is None:
+        tokenizer.pad_token = tokenizer.eos_token
+    
     model.eval()
-    print(f"\n✓ Model ready for inference")
+    print(f"\n✓ Ready\n")
+    
     # 根据 preset 或手动 system/user 构造一个或多个测试用例
     test_cases = []
 
