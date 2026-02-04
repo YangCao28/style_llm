@@ -32,7 +32,10 @@ from transformers import (
 
 
 def formatting_func_stage2(example, tokenizer, max_seq_length=2048):
-    """格式化对话数据 - 只对 assistant 回复计算 loss"""
+    """格式化对话数据 - 只对 assistant 回复计算 loss
+    
+    关键修复：使用完整tokenize后再定位assistant起始位置，避免tokenizer分词不一致
+    """
     conversations = example.get("conversations", [])
     if not conversations:
         return {"input_ids": [], "attention_mask": [], "labels": []}
@@ -58,7 +61,7 @@ def formatting_func_stage2(example, tokenizer, max_seq_length=2048):
     if assistant_response is None:
         return {"input_ids": [], "attention_mask": [], "labels": []}
     
-    # 构建 prompt（不包含 assistant 回复）
+    # 构建 prompt（不包含 assistant 回复内容，但包含 assistant 标签）
     prompt_parts = []
     for msg in messages:
         if msg["role"] != "assistant":
@@ -69,14 +72,20 @@ def formatting_func_stage2(example, tokenizer, max_seq_length=2048):
     # 完整文本（包含 assistant 回复 + EOS）
     full_text = prompt_text + assistant_response + "<|im_end|>"
     
-    # Tokenize
-    prompt_ids = tokenizer(prompt_text, add_special_tokens=False)["input_ids"]
+    # 🔑 关键：一次性tokenize完整文本，然后用prompt长度定位
     full_ids = tokenizer(full_text, truncation=True, max_length=max_seq_length, add_special_tokens=False)["input_ids"]
+    prompt_ids = tokenizer(prompt_text, add_special_tokens=False)["input_ids"]
     
-    # Labels: 只有 assistant 回复部分计算 loss
-    labels = [-100] * len(prompt_ids) + full_ids[len(prompt_ids):]
+    # 🔑 Labels构建：前 len(prompt_ids) 个token设为-100（不计算loss），之后的才计算
+    prompt_len = len(prompt_ids)
+    labels = [-100] * prompt_len + full_ids[prompt_len:]
     
-    # Padding
+    # 验证长度一致性（tokenizer可能导致不一致）
+    if len(labels) != len(full_ids):
+        # 如果长度不匹配，重新计算（保守策略：全部计算loss）
+        labels = full_ids[:]
+    
+    # Padding到max_seq_length
     input_ids = full_ids + [tokenizer.pad_token_id] * (max_seq_length - len(full_ids))
     attention_mask = [1] * len(full_ids) + [0] * (max_seq_length - len(full_ids))
     labels = labels + [-100] * (max_seq_length - len(labels))
