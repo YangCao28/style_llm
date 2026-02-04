@@ -69,7 +69,6 @@ def main():
     
     expected_output = target_sample["conversations"][2]["content"]
     
-    print(f"✓ Found sample {args.sample_id}")
     print(f"\n" + "="*80)
     print("实验设计:")
     print("="*80)
