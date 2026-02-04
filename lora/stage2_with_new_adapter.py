@@ -145,6 +145,7 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--config", type=Path, help="Path to JSON config file")
     parser.add_argument("--base_model_name", type=str, help="Base model path (local folder or HF path)")
+    parser.add_argument("--tokenizer_path", type=str, help="Tokenizer path (if different from base_model_name)")
     parser.add_argument("--stage1_adapter_path", type=str, help="Stage1 LoRA adapter path")
     parser.add_argument("--dataset_path", type=str)
     parser.add_argument("--output_dir", type=str)
@@ -199,7 +200,8 @@ def main():
     print(f"\nLoading dataset...")
     dataset = load_dataset("json", data_files=str(args.dataset_path), split="train")
     print(f"✓ 📚 Loading tokenizer...")
-    tokenizer = AutoTokenizer.from_pretrained(args.base_model_name, use_fast=True)
+    tokenizer_path = args.tokenizer_path if args.tokenizer_path else args.base_model_name
+    tokenizer = AutoTokenizer.from_pretrained(tokenizer_path, use_fast=True, local_files_only=True)
     tokenizer.padding_side = "right"
     tokenizer.model_max_length = args.max_seq_length
     if tokenizer.pad_token is None:
@@ -212,6 +214,7 @@ def main():
         args.base_model_name,
         torch_dtype=torch.bfloat16,
         attn_implementation=args.attn_impl,
+        local_files_only=True,
     )
     print(f"✓ Base model loaded: {args.base_model_name}")
     

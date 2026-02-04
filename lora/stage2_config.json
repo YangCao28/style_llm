@@ -1,5 +1,6 @@
 {
   "base_model_name": "Qwen3-8B-Base",
+  "tokenizer_path": "Qwen3-8B-Base",
   "stage1_adapter_path": "stage1_style_injection/checkpoint-531",
   "dataset_path": "data/modern_pairs_5000.jsonl",
   "output_dir": "stage2_instruct_new_adapter",
