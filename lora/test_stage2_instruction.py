@@ -83,8 +83,8 @@ def parse_args() -> argparse.Namespace:
         default=None,
         help="Optional file containing multiple user prompts. One JSONL per line with 'system'/'user', or plain text (one prompt per line).",
     )
-    # 为了支持至少 ~100 字的输出，默认给得稍微长一点
-    parser.add_argument("--max_new_tokens", type=int, default=1024)  # 降低默认值避免失控
+    # 根据训练数据分布（最长918字≈512 tokens），设置合理的默认值
+    parser.add_argument("--max_new_tokens", type=int, default=512)  # 匹配训练数据长度
     parser.add_argument("--temperature", type=float, default=0.3)
     parser.add_argument("--top_p", type=float, default=0.85)
     parser.add_argument("--repetition_penalty", type=float, default=1.5)  # 提高惩罚避免重复
