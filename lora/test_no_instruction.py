@@ -17,14 +17,14 @@ def main():
     parser.add_argument("--base_model", default="Qwen3-8B-Base", help="基座模型路径")
     parser.add_argument("--lora_model", required=True, help="LoRA模型路径")
     parser.add_argument("--test_data", default="data/modern_pairs_5000.jsonl", help="测试数据路径")
-    parser.add_argument("--sample_id", type=int, default=10, help="测试样本的source_index")
+    parser.add_argument("--sample_line", type=int, default=10, help="测试样本的行号（从0开始）")
     parser.add_argument("--max_new_tokens", type=int, default=512, help="最大生成长度")
     args = parser.parse_args()
 
     print(f"🔧 配置:")
     print(f"  Base Model: {args.base_model}")
     print(f"  LoRA Model: {args.lora_model}")
-    print(f"  Sample ID: {args.sample_id}")
+    print(f"  Sample Line: {args.sample_line}")
     
     # 加载模型
     print(f"\n📦 Loading model...")
@@ -50,18 +50,16 @@ def main():
     with open(args.test_data, 'r', encoding='utf-8') as f:
         samples = [json.loads(line) for line in f]
     
-    # 找到指定ID的样本
-    target_sample = None
-    for sample in samples:
-        if sample.get("source_index") == args.sample_id:
-            target_sample = sample
-            break
-    
-    if not target_sample:
-        print(f"❌ Sample {args.sample_id} not found!")
+    # 读取指定行号的样本
+    if args.sample_line >= len(samples):
+        print(f"❌ Line {args.sample_line} out of range! Total lines: {len(samples)}")
         return
     
-    # 提取现代白话文本
+    target_sample = samples[args.sample_line]
+    
+    print(f"✓ Loaded sample at line {args.sample_line}")
+    print(f"  source_index: {target_sample.get('source_index', 'N/A')}")
+    print(f"  record_id: {target_sample.get('record_id', 'N/A')}")
     user_content = target_sample["conversations"][1]["content"]
     modern_text_start = user_content.find("请将以下现代白话润色成雅致的文学文本：\n\n")
     if modern_text_start != -1:
