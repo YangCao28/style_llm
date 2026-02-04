@@ -1,0 +1,286 @@
+"""单阶段指令微调 V2 - 支持Soft Masking
+
+🔑 关键改进：
+  1. 支持混合屏蔽法（20% Soft Masking）
+  2. 可配置soft_mask_ratio
+  3. 降低learning rate以配合soft masking
+
+Usage:
+    python -m lora.single_stage_v2 --config lora/single_stage_v2_config.json
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import random
+from pathlib import Path
+
+import torch
+from datasets import load_dataset
+from peft import LoraConfig, get_peft_model
+from transformers import (
+    AutoModelForCausalLM,
+    AutoTokenizer,
+    Trainer,
+    TrainingArguments,
+    TrainerCallback,
+)
+
+
+def formatting_func_with_soft_mask(example, tokenizer, max_seq_length=2048, soft_mask_ratio=0.2, debug=False):
+    """格式化对话数据 - 支持Soft Masking
+    
+    Args:
+        soft_mask_ratio: Soft Masking比例，这部分样本不屏蔽user端（默认20%）
+                        设为0.0则完全Hard Mask，设为1.0则全量学习
+    """
+    conversations = example.get("conversations", [])
+    if not conversations:
+        return {"input_ids": [], "attention_mask": [], "labels": []}
+    
+    # 构建对话
+    messages = []
+    assistant_response = None
+    
+    for msg in conversations:
+        role = msg.get("role") or msg.get("from") or "user"
+        content = msg.get("content") or msg.get("value") or ""
+        
+        if role in ("system", "sys"):
+            norm_role = "system"
+        elif role in ("assistant", "gpt", "bot"):
+            norm_role = "assistant"
+            assistant_response = content.strip()
+        else:
+            norm_role = "user"
+        
+        messages.append({"role": norm_role, "content": content})
+    
+    if assistant_response is None:
+        return {"input_ids": [], "attention_mask": [], "labels": []}
+    
+    # 构建 prompt（不包含 assistant 回复内容，但包含 assistant 开始标签）
+    prompt_parts = []
+    for msg in messages:
+        if msg["role"] != "assistant":
+            prompt_parts.append(f"<|im_start|>{msg['role']}\n{msg['content']}<|im_end|>")
+    prompt_parts.append("<|im_start|>assistant\n")
+    prompt_text = "\n".join(prompt_parts)
+    
+    # 分别tokenize
+    prompt_ids = tokenizer(prompt_text, add_special_tokens=False)["input_ids"]
+    assistant_text = assistant_response + "<|im_end|>"
+    assistant_ids = tokenizer(assistant_text, add_special_tokens=False)["input_ids"]
+    
+    # 拼接完整序列
+    input_ids = prompt_ids + assistant_ids
+    
+    # 截断
+    if len(input_ids) > max_seq_length:
+        input_ids = input_ids[:max_seq_length]
+        if len(prompt_ids) > max_seq_length:
+            return {"input_ids": [], "attention_mask": [], "labels": []}
+    
+    # 🔥 混合屏蔽法：决定是否使用Soft Masking
+    use_soft_mask = random.random() < soft_mask_ratio
+    
+    if use_soft_mask:
+        # Soft Masking: 全量学习，不屏蔽user
+        # 模型需要预测整段对话，有助于理解指令
+        labels = input_ids.copy()
+    else:
+        # Hard Masking: 只计算assistant的loss
+        labels = [-100] * len(prompt_ids) + assistant_ids
+    
+    labels = labels[:max_seq_length]
+    
+    # Padding
+    padding_length = max_seq_length - len(input_ids)
+    input_ids = input_ids + [tokenizer.pad_token_id] * padding_length
+    attention_mask = [1] * len(input_ids[:max_seq_length - padding_length]) + [0] * padding_length
+    labels = labels + [-100] * (max_seq_length - len(labels))
+    
+    if debug:
+        mask_type = "Soft (全量学习)" if use_soft_mask else "Hard (只学Assistant)"
+        print(f"\n🔍 样本屏蔽类型: {mask_type}")
+        print(f"  Prompt tokens: {len(prompt_ids)}")
+        print(f"  Assistant tokens: {len(assistant_ids)}")
+        print(f"  Labels中-100数量: {sum(1 for l in labels if l == -100)}")
+        print(f"  Labels中有效数量: {sum(1 for l in labels if l != -100)}")
+    
+    return {
+        "input_ids": input_ids[:max_seq_length],
+        "attention_mask": attention_mask[:max_seq_length],
+        "labels": labels[:max_seq_length],
+    }
+
+
+class LossRecorderCallback(TrainerCallback):
+    def __init__(self):
+        self.training_losses = []
+        self.steps = []
+    
+    def on_log(self, args, state, control, logs=None, **kwargs):
+        if logs and "loss" in logs:
+            self.training_losses.append(logs["loss"])
+            self.steps.append(state.global_step)
+            if getattr(state, "is_world_process_zero", True):
+                print(f"[step {state.global_step}] loss = {logs['loss']:.4f}")
+
+
+def main():
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
+        print(f"✓ CUDA: {torch.cuda.get_device_name(0)}")
+    
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--config", type=Path, required=True, help="Path to JSON config file")
+    parser.add_argument("--soft_mask_ratio", type=float, default=None, help="Override soft masking ratio")
+    args = parser.parse_args()
+
+    # 加载配置
+    with open(args.config, 'r', encoding='utf-8') as f:
+        config = json.load(f)
+    
+    # 参数覆盖
+    if args.soft_mask_ratio is not None:
+        config["soft_mask_ratio"] = args.soft_mask_ratio
+    
+    base_model_name = config["base_model_name"]
+    dataset_path = config["dataset_path"]
+    output_dir = config["output_dir"]
+    soft_mask_ratio = config.get("soft_mask_ratio", 0.2)  # 默认20%
+    
+    print(f"\n🔧 配置:")
+    print(f"  Base Model: {base_model_name}")
+    print(f"  Dataset: {dataset_path}")
+    print(f"  Output: {output_dir}")
+    print(f"  Soft Mask Ratio: {soft_mask_ratio:.1%} ({'混合屏蔽' if 0 < soft_mask_ratio < 1 else '全量学习' if soft_mask_ratio == 1 else 'Hard Mask'})")
+    print(f"  Learning Rate: {config.get('learning_rate', 4e-5)}")
+    print(f"  LoRA Rank: {config.get('lora_r', 64)}")
+    
+    # 加载tokenizer
+    print(f"\n📦 加载 tokenizer...")
+    tokenizer_path = config.get("tokenizer_path", base_model_name)
+    tokenizer = AutoTokenizer.from_pretrained(
+        tokenizer_path,
+        trust_remote_code=True,
+        use_fast=False,
+        local_files_only=True
+    )
+    
+    if tokenizer.pad_token is None:
+        tokenizer.pad_token = tokenizer.eos_token
+        tokenizer.pad_token_id = tokenizer.eos_token_id
+    
+    # 加载base model
+    print(f"📦 加载 base model...")
+    model = AutoModelForCausalLM.from_pretrained(
+        base_model_name,
+        torch_dtype=torch.bfloat16,
+        device_map="auto",
+        trust_remote_code=True,
+        attn_implementation="sdpa",
+        local_files_only=True
+    )
+    
+    # 配置LoRA
+    lora_config = LoraConfig(
+        r=config.get("lora_r", 64),
+        lora_alpha=config.get("lora_alpha", 128),
+        target_modules=["q_proj", "k_proj", "v_proj", "o_proj", "gate_proj", "up_proj", "down_proj"],
+        lora_dropout=config.get("lora_dropout", 0.05),
+        bias="none",
+        task_type="CAUSAL_LM",
+    )
+    
+    model = get_peft_model(model, lora_config)
+    model.print_trainable_parameters()
+    
+    # 加载数据集
+    print(f"\n📊 加载数据集: {dataset_path}")
+    dataset = load_dataset("json", data_files=dataset_path, split="train")
+    print(f"✓ 加载 {len(dataset)} 条样本")
+    
+    # 格式化数据集 - 传入soft_mask_ratio
+    print(f"\n🔄 格式化数据集 (Soft Mask Ratio={soft_mask_ratio:.1%})...")
+    
+    def format_fn(example):
+        return formatting_func_with_soft_mask(
+            example,
+            tokenizer,
+            max_seq_length=config.get("max_seq_length", 2048),
+            soft_mask_ratio=soft_mask_ratio,
+            debug=False
+        )
+    
+    formatted_dataset = dataset.map(
+        format_fn,
+        remove_columns=dataset.column_names,
+        num_proc=1,
+        desc="Formatting with Soft Masking"
+    )
+    
+    # 过滤空样本
+    formatted_dataset = formatted_dataset.filter(lambda x: len(x["input_ids"]) > 0)
+    print(f"✓ 格式化完成: {len(formatted_dataset)} 条有效样本")
+    
+    # 训练参数
+    training_args = TrainingArguments(
+        output_dir=output_dir,
+        num_train_epochs=config.get("num_train_epochs", 2.0),
+        per_device_train_batch_size=config.get("per_device_train_batch_size", 4),
+        gradient_accumulation_steps=config.get("gradient_accumulation_steps", 4),
+        learning_rate=config.get("learning_rate", 4e-5),
+        lr_scheduler_type=config.get("lr_scheduler_type", "cosine"),
+        warmup_ratio=config.get("warmup_ratio", 0.1),
+        logging_steps=config.get("logging_steps", 10),
+        save_strategy="steps",
+        save_steps=config.get("save_steps", 200),
+        save_total_limit=3,
+        bf16=True,
+        gradient_checkpointing=True,
+        dataloader_num_workers=4,
+        report_to="none",
+    )
+    
+    # 回调
+    loss_recorder = LossRecorderCallback()
+    
+    # Trainer
+    trainer = Trainer(
+        model=model,
+        args=training_args,
+        train_dataset=formatted_dataset,
+        callbacks=[loss_recorder],
+    )
+    
+    # 训练
+    print(f"\n🚀 开始训练...")
+    print(f"  {'='*80}")
+    print(f"  🎯 关键配置:")
+    print(f"     - Soft Masking: {soft_mask_ratio:.1%} 样本全量学习")
+    print(f"     - Hard Masking: {(1-soft_mask_ratio):.1%} 样本只学Assistant")
+    print(f"     - Learning Rate: {config.get('learning_rate', 4e-5)} (温和以配合Soft Masking)")
+    print(f"  {'='*80}\n")
+    
+    trainer.train()
+    
+    # 保存
+    print(f"\n💾 保存模型...")
+    trainer.save_model(output_dir)
+    
+    # 显示训练曲线
+    if loss_recorder.training_losses:
+        print(f"\n📊 训练统计:")
+        print(f"  初始 loss: {loss_recorder.training_losses[0]:.4f}")
+        print(f"  最终 loss: {loss_recorder.training_losses[-1]:.4f}")
+        print(f"  Loss 下降: {loss_recorder.training_losses[0] - loss_recorder.training_losses[-1]:.4f}")
+    
+    print(f"\n✓ 训练完成！")
+    print(f"  📁 模型保存到: {output_dir}")
+
+
+if __name__ == "__main__":
+    main()
