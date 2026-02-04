@@ -1,9 +1,0 @@
-{
-  "wuxia_vernacular": {
-    "file_name": "wuxia_vernacular_pairs.jsonl",
-    "columns": {
-      "prompt": "vernacular_text",
-      "response": "wuxia_text"
-    }
-  }
-}
