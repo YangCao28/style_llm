@@ -18,13 +18,15 @@
 **目录结构**：
 ```
 项目目录/
+├── Qwen3-8B-Base/                     # 本地基座模型
 ├── stage1_style_injection/
 │   └── checkpoint-531/
 │       ├── adapter_config.json
 │       └── adapter_model.safetensors  # Style adapter 权重
 └── stage2_instruct_new_adapter/
-    ├── adapter_config.json
-    └── adapter_model.safetensors      # Instruct adapter 权重
+    └── checkpoint-158/                # 具体的checkpoint目录
+        ├── adapter_config.json
+        └── adapter_model.safetensors  # Instruct adapter 权重
 ```
 
 ## 数学原理
@@ -131,9 +133,9 @@ if len(adapters) > 1:
 ```
 Mode: Dual LoRA (Stacked Adapters)
 
+Base model:       Qwen3-8B-Base
 Style adapter:    stage1_style_injection/checkpoint-531
-Instruct adapter: stage2_instruct_new_adapter
-Base: Qwen3-8B-Base (from style adapter config)
+Instruct adapter: stage2_instruct_new_adapter/checkpoint-158
 
 ✓ Loaded style adapter
 ✓ Loaded instruct adapter
@@ -197,8 +199,9 @@ python -m lora.test_stage2_instruction \
 
 # 测试 Stage2（style + instruct 叠加）
 python -m lora.test_stage2_instruction \
+    --base_model Qwen3-8B-Base \
     --style_adapter stage1_style_injection/checkpoint-531 \
-    --instruct_adapter stage2_instruct_new_adapter \
+    --instruct_adapter stage2_instruct_new_adapter/checkpoint-158 \
     > stage2_output.txt
 
 # 对比结果
@@ -258,10 +261,11 @@ for name, module in model.named_modules():
 **实际情况**（两个adapter分开存储）：
 ```
 项目目录/
+├── Qwen3-8B-Base/                     # 本地基座模型
 ├── stage1_style_injection/checkpoint-531/
 │   ├── adapter_config.json
 │   └── adapter_model.safetensors    # Style adapter 权重
-└── stage2_instruct_new_adapter/
+└── stage2_instruct_new_adapter/checkpoint-158/
     ├── adapter_config.json
     └── adapter_model.safetensors    # Instruct adapter 权重
 ```
@@ -304,17 +308,11 @@ python -m lora.test_stage2_instruction \
 
 ### 3. 测试 Stage2（风格 + 指令双 adapters 叠加）
 ```bash
-# ⚠️ 正确方式：分别指定两个adapter的路径
+# ⚠️ 正确方式：分别指定两个adapter的路径（使用具体的checkpoint）
 python -m lora.test_stage2_instruction \
+    --base_model Qwen3-8B-Base \
     --style_adapter stage1_style_injection/checkpoint-531 \
-    --instruct_adapter stage2_instruct_new_adapter \
-    --preset elegant_style
-
-# 可选：手动指定base model（覆盖自动检测）
-python -m lora.test_stage2_instruction \
-    --base_model /path/to/Qwen3-8B-Base \
-    --style_adapter stage1_style_injection/checkpoint-531 \
-    --instruct_adapter stage2_instruct_new_adapter \
+    --instruct_adapter stage2_instruct_new_adapter/checkpoint-158 \
     --preset elegant_style
 ```
 
@@ -349,8 +347,9 @@ python -m lora.test_stage2_instruction --lora_model stage1_style_injection/check
 
 echo -e "\n\n=== 测试 Stage2 (style + instruct stacked) ==="
 python -m lora.test_stage2_instruction \
+    --base_model Qwen3-8B-Base \
     --style_adapter stage1_style_injection/checkpoint-531 \
-    --instruct_adapter stage2_instruct_new_adapter \
+    --instruct_adapter stage2_instruct_new_adapter/checkpoint-158 \
     --preset elegant_style
 EOF
 
@@ -371,8 +370,9 @@ python -m lora.test_stage2_instruction --lora_model stage1_style_injection/check
 # 测试 Stage2（双adapter叠加）
 Write-Host "`n`n=== 测试 Stage2 (style + instruct stacked) ===" -ForegroundColor Cyan
 python -m lora.test_stage2_instruction `
+    --base_model Qwen3-8B-Base `
     --style_adapter stage1_style_injection/checkpoint-531 `
-    --instruct_adapter stage2_instruct_new_adapter `
+    --instruct_adapter stage2_instruct_new_adapter/checkpoint-158 `
     --preset elegant_style
 ```
 

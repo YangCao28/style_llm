@@ -21,8 +21,9 @@ Usage examples:
 
     # Test Stage2 (style + instruct stacked)
     python -m lora.test_stage2_instruction \
+        --base_model Qwen3-8B-Base \
         --style_adapter stage1_style_injection/checkpoint-531 \
-        --instruct_adapter stage2_instruct_new_adapter
+        --instruct_adapter stage2_instruct_new_adapter/checkpoint-158
 
     # Override base model detection
     python -m lora.test_stage2_instruction \
@@ -153,8 +154,6 @@ def main():
     if args.style_adapter and args.instruct_adapter:
         # 双 LoRA 模式：分别加载 style 和 instruct adapters
         print(f"Mode: Dual LoRA (Stacked Adapters)\n")
-        print(f"Style adapter:    {args.style_adapter}")
-        print(f"Instruct adapter: {args.instruct_adapter}")
         
         # 获取 base model（优先级：--base_model > adapter config > 当前目录）
         base_model_name = args.base_model
@@ -165,8 +164,6 @@ def main():
                     with open(style_config_path, "r", encoding="utf-8") as f:
                         config = json.load(f)
                     base_model_name = config.get("base_model_name_or_path")
-                    if base_model_name:
-                        print(f"Base: {base_model_name} (from style adapter config)")
                 except Exception as e:
                     print(f"⚠️  Failed to read style adapter config: {e}")
         
@@ -174,22 +171,23 @@ def main():
             default_base = Path("Qwen3-8B-Base")
             if default_base.exists():
                 base_model_name = str(default_base)
-                print(f"Base: {base_model_name} (auto-detected in current dir)")
             else:
                 raise ValueError(
                     "❌ Cannot determine base model.\n"
                     "Use --base_model Qwen3-8B-Base"
                 )
-        else:
-            if args.base_model:
-                print(f"Base: {base_model_name}")
+        
+        print(f"Base model:       {base_model_name}")
+        print(f"Style adapter:    {args.style_adapter}")
+        print(f"Instruct adapter: {args.instruct_adapter}\n")
         # 加载 tokenizer 和 base model
-        tokenizer = AutoTokenizer.from_pretrained(base_model_name, use_fast=True)
+        tokenizer = AutoTokenizer.from_pretrained(base_model_name, use_fast=True, local_files_only=True)
         base_model = AutoModelForCausalLM.from_pretrained(
             base_model_name,
             torch_dtype=torch.bfloat16,
             device_map="auto",
             attn_implementation=args.attn_impl,
+            local_files_only=True,
         )
         
         # 🔑 加载第一个 adapter (style)
@@ -252,7 +250,7 @@ def main():
                 print(f"Base: {base_model_name}")
         
         # 加载 tokenizer
-        tokenizer = AutoTokenizer.from_pretrained(base_model_name, use_fast=True)
+        tokenizer = AutoTokenizer.from_pretrained(base_model_name, use_fast=True, local_files_only=True)
         
         # 加载 base model
         base_model = AutoModelForCausalLM.from_pretrained(
@@ -260,6 +258,7 @@ def main():
             torch_dtype=torch.bfloat16,
             device_map="auto",
             attn_implementation=args.attn_impl,
+            local_files_only=True,
         )
         
         # 加载 LoRA adapter
@@ -291,12 +290,13 @@ def main():
                 base_model_name = str(local_base)
                 print(f"(Using: {base_model_name})")
         
-        tokenizer = AutoTokenizer.from_pretrained(base_model_name, use_fast=True)
+        tokenizer = AutoTokenizer.from_pretrained(base_model_name, use_fast=True, local_files_only=True)
         model = AutoModelForCausalLM.from_pretrained(
             base_model_name,
             torch_dtype=torch.bfloat16,
             device_map="auto",
             attn_implementation=args.attn_impl,
+            local_files_only=True,
         )
     
     else:
