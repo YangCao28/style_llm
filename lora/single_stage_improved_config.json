@@ -1,0 +1,19 @@
+{
+  "base_model_name": "Qwen3-8B-Base",
+  "dataset_path": "data/mixed_train.jsonl",
+  "output_dir": "single_stage_improved",
+  
+  "lora_r": 128,
+  "lora_alpha": 256,
+  "lora_dropout": 0.05,
+  
+  "learning_rate": 4e-5,
+  "num_train_epochs": 2.0,
+  "per_device_train_batch_size": 4,
+  "gradient_accumulation_steps": 4,
+  
+  "lr_scheduler_type": "cosine",
+  "warmup_ratio": 0.1,
+  "logging_steps": 10,
+  "save_steps": 100
+}
