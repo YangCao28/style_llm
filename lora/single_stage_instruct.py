@@ -1,16 +1,13 @@
-"""Stage-2 指令微调 - 添加新的 LoRA adapter
+"""单阶段指令微调 - 直接在 Base Model 上训练
 
-🔑 关键修复：
-  1. 在 Stage1 的基础上添加第二个 LoRA adapter（专门用于指令学习）
-  2. 冻结 Stage1 的 adapter（保留风格能力），只训练新的 adapter
-  3. 正确的 labels 分割（只对 assistant 回复计算 loss）
-
-训练流程：
-  Stage1 (style) → frozen → 保留风格注入能力
-  Stage2 (instruct) → trainable → 学习指令遵循
+🔑 关键改进：
+  1. 跳过 Stage1，直接在 base model 上训练指令能力
+  2. 避免续写数据的干扰
+  3. 更高的学习率和更多训练轮次
+  4. 正确的 labels 分割（只对 assistant 回复计算 loss）
 
 Usage:
-    python -m lora.stage2_with_new_adapter --config lora/stage2_config.json
+    python -m lora.single_stage_instruct --config lora/single_stage_config.json
 """
 
 from __future__ import annotations
@@ -21,7 +18,7 @@ from pathlib import Path
 
 import torch
 from datasets import load_dataset
-from peft import LoraConfig, get_peft_model, PeftModel
+from peft import LoraConfig, get_peft_model
 from transformers import (
     AutoModelForCausalLM,
     AutoTokenizer,
@@ -31,7 +28,7 @@ from transformers import (
 )
 
 
-def formatting_func_stage2(example, tokenizer, max_seq_length=2048, debug=False):
+def formatting_func_instruct(example, tokenizer, max_seq_length=2048, debug=False):
     """格式化对话数据 - 只对 assistant 回复计算 loss
     
     正确方法：分别tokenize prompt和assistant，然后拼接并构建labels
@@ -101,12 +98,12 @@ def formatting_func_stage2(example, tokenizer, max_seq_length=2048, debug=False)
     # Debug打印第一个样本
     if debug:
         print("\n" + "="*80)
-        print("🔍 DEBUG: formatting_func_stage2 第一个样本详情")
+        print("🔍 DEBUG: formatting_func_instruct 第一个样本详情")
         print("="*80)
         print(f"\n📝 Prompt文本 ({len(prompt_ids)} tokens):")
-        print(prompt_text)
+        print(prompt_text[:200] + "...")
         print(f"\n✅ Assistant文本 ({len(assistant_ids)} tokens):")
-        print(assistant_text)
+        print(assistant_text[:200] + "...")
         print(f"\n📊 统计:")
         print(f"  Prompt tokens: {len(prompt_ids)}")
         print(f"  Assistant tokens: {len(assistant_ids)}")
@@ -144,22 +141,21 @@ def main():
     # 解析参数
     parser = argparse.ArgumentParser()
     parser.add_argument("--config", type=Path, help="Path to JSON config file")
-    parser.add_argument("--base_model_name", type=str, help="Base model path (local folder or HF path)")
+    parser.add_argument("--base_model_name", type=str, help="Base model path")
     parser.add_argument("--tokenizer_path", type=str, help="Tokenizer path (if different from base_model_name)")
-    parser.add_argument("--stage1_adapter_path", type=str, help="Stage1 LoRA adapter path")
     parser.add_argument("--dataset_path", type=str)
     parser.add_argument("--output_dir", type=str)
     parser.add_argument("--per_device_train_batch_size", type=int, default=2)
     parser.add_argument("--gradient_accumulation_steps", type=int, default=32)
-    parser.add_argument("--learning_rate", type=float, default=5e-5)
-    parser.add_argument("--warmup_steps", type=int, default=20)
-    parser.add_argument("--num_train_epochs", type=float, default=2.0)
+    parser.add_argument("--learning_rate", type=float, default=2e-4)
+    parser.add_argument("--warmup_steps", type=int, default=50)
+    parser.add_argument("--num_train_epochs", type=float, default=5.0)
     parser.add_argument("--max_seq_length", type=int, default=2048)
     parser.add_argument("--logging_steps", type=int, default=5)
-    parser.add_argument("--save_steps", type=int, default=50)
+    parser.add_argument("--save_steps", type=int, default=100)
     parser.add_argument("--attn_impl", type=str, default="sdpa")
-    parser.add_argument("--lora_r", type=int, default=64, help="New adapter rank")
-    parser.add_argument("--lora_alpha", type=int, default=128, help="New adapter alpha")
+    parser.add_argument("--lora_r", type=int, default=128, help="LoRA rank")
+    parser.add_argument("--lora_alpha", type=int, default=256, help="LoRA alpha")
     
     args = parser.parse_args()
     
@@ -174,32 +170,29 @@ def main():
                 setattr(args, key, value)
     
     # 检查必需参数
-    if not args.base_model_name or not args.stage1_adapter_path or not args.dataset_path or not args.output_dir:
-        parser.error("Required: --base_model_name, --stage1_adapter_path, --dataset_path, --output_dir")
+    if not args.base_model_name or not args.dataset_path or not args.output_dir:
+        parser.error("Required: --base_model_name, --dataset_path, --output_dir")
     
-    args.stage1_adapter_path = Path(args.stage1_adapter_path)
     args.dataset_path = Path(args.dataset_path)
     args.output_dir = Path(args.output_dir)
     args.output_dir.mkdir(parents=True, exist_ok=True)
     
     print("=" * 80)
-    print("Stage 2: Instruction Tuning with NEW LoRA Adapter")
+    print("Single Stage: Instruction Fine-tuning on Base Model")
     print("=" * 80)
     print(f"Base model: {args.base_model_name}")
-    print(f"Stage1 adapter: {args.stage1_adapter_path}")
     print(f"Dataset: {args.dataset_path}")
     print(f"Output: {args.output_dir}")
-    print(f"New adapter rank: {args.lora_r}, alpha: {args.lora_alpha}")
-    print("\n🔑 Strategy:")
-    print("  1. Load pure base model")
-    print("  2. Load Stage1 style adapter (FROZEN)")
-    print("  3. Add new instruct adapter (TRAINABLE)")
-    print("  4. Both adapters active during inference")
+    print(f"LoRA rank: {args.lora_r}, alpha: {args.lora_alpha}")
+    print(f"Learning rate: {args.learning_rate}")
+    print(f"Epochs: {args.num_train_epochs}")
     
     # 加载数据集
-    print(f"\nLoading dataset...")
+    print(f"\n📚 Loading dataset...")
     dataset = load_dataset("json", data_files=str(args.dataset_path), split="train")
-    print(f"✓ 📚 Loading tokenizer...")
+    print(f"✓ Dataset loaded: {len(dataset)} samples")
+    
+    print(f"\n📚 Loading tokenizer...")
     tokenizer_path = args.tokenizer_path if args.tokenizer_path else args.base_model_name
     tokenizer = AutoTokenizer.from_pretrained(tokenizer_path, use_fast=True, local_files_only=True)
     tokenizer.padding_side = "right"
@@ -208,8 +201,8 @@ def main():
         tokenizer.pad_token = tokenizer.eos_token
     print(f"✓ Tokenizer loaded")
     
-    # 🔑 关键步骤1：加载纯净的 base model
-    print(f"\n🎯 Step 1: Loading pure base model...")
+    # 加载 base model
+    print(f"\n🎯 Loading base model...")
     base_model = AutoModelForCausalLM.from_pretrained(
         args.base_model_name,
         torch_dtype=torch.bfloat16,
@@ -218,19 +211,8 @@ def main():
     )
     print(f"✓ Base model loaded: {args.base_model_name}")
     
-    # 🔑 关键步骤2：加载 Stage1 的 style adapter
-    print(f"\n🎨 Step 2: Loading Stage1 style adapter...")
-    model = PeftModel.from_pretrained(
-        base_model,
-        args.stage1_adapter_path,
-        adapter_name="style",
-    )
-    print(f"✓ Style adapter loaded and will be FROZEN")
-    
-    # 🔑 关键步骤3：添加新的 instruct adapter
-    print(f"\n📝 Step 3: Adding NEW instruct adapter...")
-    
-    # 配置新的 adapter
+    # 配置 LoRA
+    print(f"\n📝 Adding LoRA adapter...")
     lora_config = LoraConfig(
         r=args.lora_r,
         lora_alpha=args.lora_alpha,
@@ -240,29 +222,8 @@ def main():
         task_type="CAUSAL_LM",
     )
     
-    # 添加新的 adapter
-    model.add_adapter("instruct", lora_config)
-    print(f"✓ Instruct adapter added (trainable)")
-    
-    # 🔑 关键步骤4：冻结 style adapter，只训练 instruct adapter
-    print(f"\n🔒 Step 4: Freezing style adapter, training instruct only...")
-    
-    # 列出所有 adapters
-    print(f"📋 Available adapters:")
-    if hasattr(model, 'peft_config'):
-        for name in model.peft_config.keys():
-            print(f"  - {name}")
-    
-    # 设置当前活跃的 adapter 为 "instruct"
-    model.set_adapter("instruct")
-    
-    # 冻结 style adapter 的参数
-    for name, param in model.named_parameters():
-        if "style" in name:
-            param.requires_grad = False
-            
-    print(f"✓ Style adapter: FROZEN (but active during forward)")
-    print(f"✓ Instruct adapter: TRAINABLE (active)")
+    model = get_peft_model(base_model, lora_config)
+    print(f"✓ LoRA adapter added")
     
     # 验证：检查哪些参数是可训练的
     trainable_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
@@ -272,14 +233,13 @@ def main():
     print(f"  Total: {total_params:,}")
     
     # Tokenize 数据集
-    print("\nTokenizing dataset...")
+    print("\n🔄 Tokenizing dataset...")
     
     # 先处理第一个样本用于debug
-    first_example = {key: [dataset[0][key]] for key in dataset[0].keys()}
     print("\n" + "="*80)
     print("🔍 处理第一个样本 (debug mode)")
     print("="*80)
-    formatting_func_stage2(dataset[0], tokenizer, args.max_seq_length, debug=True)
+    formatting_func_instruct(dataset[0], tokenizer, args.max_seq_length, debug=True)
     
     def tokenize_function(examples):
         results = {
@@ -291,7 +251,7 @@ def main():
         num_samples = len(examples["conversations"])
         for i in range(num_samples):
             example = {key: examples[key][i] for key in examples}
-            formatted = formatting_func_stage2(example, tokenizer, args.max_seq_length)
+            formatted = formatting_func_instruct(example, tokenizer, args.max_seq_length)
             
             if formatted["input_ids"]:
                 results["input_ids"].append(formatted["input_ids"])
@@ -307,60 +267,6 @@ def main():
         remove_columns=dataset.column_names,
     )
     print(f"✓ Tokenization complete: {len(tokenized_dataset):,} samples")
-    
-    # 验证第一个样本 - 详细检查labels
-    print("\n🔍 验证 labels（应只包含 assistant 回复）:")
-    first_sample = tokenized_dataset[0]
-    first_labels = first_sample["labels"]
-    first_input_ids = first_sample["input_ids"]
-    
-    # 统计有效labels（不是-100的）
-    valid_label_ids = [lid for lid in first_labels if lid != -100]
-    ignored_count = sum(1 for lid in first_labels if lid == -100)
-    padding_count = sum(1 for iid in first_input_ids if iid == tokenizer.pad_token_id)
-    
-    print(f"📊 Labels统计:")
-    print(f"  Total tokens: {len(first_labels)}")
-    print(f"  Ignored (-100): {ignored_count} ({100*ignored_count/len(first_labels):.1f}%)")
-    print(f"  Valid (计算loss): {len(valid_label_ids)} ({100*len(valid_label_ids)/len(first_labels):.1f}%)")
-    print(f"  Padding tokens: {padding_count}")
-    
-    # 🔑 关键检查：验证labels和input_ids的对应关系
-    print(f"\n🔑 关键验证: Labels与Input_ids对应关系")
-    non_pad_count = sum(1 for iid in first_input_ids if iid != tokenizer.pad_token_id)
-    print(f"  Input有效tokens: {non_pad_count}")
-    print(f"  Labels有效tokens: {len(valid_label_ids)}")
-    
-    # 找到第一个非-100的label位置
-    first_valid_idx = next((i for i, l in enumerate(first_labels) if l != -100), -1)
-    if first_valid_idx >= 0:
-        print(f"  第一个有效label位置: {first_valid_idx}")
-        print(f"  该位置的input_id: {first_input_ids[first_valid_idx]}")
-        print(f"  该位置的label: {first_labels[first_valid_idx]}")
-        
-        # 检查是否match
-        if first_input_ids[first_valid_idx] == first_labels[first_valid_idx]:
-            print(f"  ⚠️  WARNING: input_id == label，这意味着在当前token位置predict当前token！")
-            print(f"  ⚠️  应该是input[i] predict label[i+1]才对（Trainer会自动shift）")
-        else:
-            print(f"  ✓ input_id != label (这是正常的)")
-    
-    if valid_label_ids:
-        decoded = tokenizer.decode(valid_label_ids, skip_special_tokens=False)
-        print(f"\n✅ Valid labels内容:")
-        print(decoded)
-        if any(m in decoded.lower() for m in ["<|im_start|>system", "<|im_start|>user"]):
-            print("⚠️  WARNING: Labels 包含 system/user 标记！")
-    else:
-        print("❌ ERROR: 没有有效的labels！")
-    
-    # 检查input_ids
-    print(f"\n📝 完整input示例:")
-    decoded_input = tokenizer.decode([iid for iid in first_input_ids if iid != tokenizer.pad_token_id], skip_special_tokens=False)
-    print(decoded_input)
-    
-    if len(valid_label_ids) < 10:
-        print(f"\n⚠️  WARNING: 有效labels太少 ({len(valid_label_ids)} tokens)，可能导致loss异常！")
     
     if torch.cuda.is_available():
         torch.cuda.empty_cache()
@@ -397,43 +303,37 @@ def main():
     
     # 开始训练
     print("\n" + "=" * 80)
-    print("Starting training...")
+    print("🚀 Starting training...")
     print("=" * 80 + "\n")
     
     trainer.train()
     
-    # 🔑 关键：只保存 instruct adapter（不保存 style adapter）
-    print("\n💾 Saving ONLY instruct adapter (NOT style)...")
-    
-    # 方法1：直接保存 instruct adapter
-    model.save_pretrained(
-        args.output_dir,
-        selected_adapters=["instruct"],  # 只保存 instruct adapter
-    )
+    # 保存模型
+    print("\n💾 Saving model...")
+    model.save_pretrained(args.output_dir)
     tokenizer.save_pretrained(args.output_dir)
     
-    # 保存 adapter 配置信息
-    adapter_info = {
+    # 保存配置信息
+    model_info = {
         "base_model": args.base_model_name,
-        "stage1_style_adapter": str(args.stage1_adapter_path),
-        "stage2_instruct_adapter": "instruct (this folder)",
-        "usage": "Load base model + stage1 style adapter + this instruct adapter for inference",
-        "inference_command": f"--style_adapter {args.stage1_adapter_path} --instruct_adapter {args.output_dir}",
+        "training_type": "single_stage_instruction_tuning",
+        "dataset": str(args.dataset_path),
+        "lora_r": args.lora_r,
+        "lora_alpha": args.lora_alpha,
+        "learning_rate": args.learning_rate,
+        "num_train_epochs": args.num_train_epochs,
     }
-    with open(args.output_dir / "adapter_info.json", "w", encoding="utf-8") as f:
-        json.dump(adapter_info, f, indent=2, ensure_ascii=False)
+    with open(args.output_dir / "model_info.json", "w", encoding="utf-8") as f:
+        json.dump(model_info, f, indent=2, ensure_ascii=False)
     
     print(f"\n✓ Training complete!")
-    print(f"  📁 Instruct adapter saved to: {args.output_dir}")
-    print(f"  📁 Style adapter remains at: {args.stage1_adapter_path}")
-    print(f"\n🎯 For inference, use BOTH adapters:")
-    print(f"  python -m lora.test_stage2_instruction \\")
-    print(f"    --style_adapter {args.stage1_adapter_path} \\")
-    print(f"    --instruct_adapter {args.output_dir}")
+    print(f"  📁 Model saved to: {args.output_dir}")
+    
     if loss_recorder.training_losses:
         print(f"\n📊 Training stats:")
         print(f"  Initial loss: {loss_recorder.training_losses[0]:.4f}")
         print(f"  Final loss: {loss_recorder.training_losses[-1]:.4f}")
+        print(f"  Loss reduction: {loss_recorder.training_losses[0] - loss_recorder.training_losses[-1]:.4f}")
     
     if torch.cuda.is_available():
         torch.cuda.empty_cache()
