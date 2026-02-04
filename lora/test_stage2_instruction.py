@@ -84,10 +84,10 @@ def parse_args() -> argparse.Namespace:
         help="Optional file containing multiple user prompts. One JSONL per line with 'system'/'user', or plain text (one prompt per line).",
     )
     # 为了支持至少 ~100 字的输出，默认给得稍微长一点
-    parser.add_argument("--max_new_tokens", type=int, default=2048)
+    parser.add_argument("--max_new_tokens", type=int, default=1024)  # 降低默认值避免失控
     parser.add_argument("--temperature", type=float, default=0.3)
     parser.add_argument("--top_p", type=float, default=0.85)
-    parser.add_argument("--repetition_penalty", type=float, default=1.3)
+    parser.add_argument("--repetition_penalty", type=float, default=1.5)  # 提高惩罚避免重复
     parser.add_argument("--seed", type=int, default=1234)
     parser.add_argument(
         "--attn_impl",
@@ -271,6 +271,23 @@ def main() -> None:
         # 🔍 调试信息
         print(f"\n[DEBUG] Prompt length: {len(prompt)} chars, {inputs['input_ids'].shape[1]} tokens")
         print(f"[DEBUG] Prompt ends with: ...{prompt[-100:]}")
+        
+        # 🔑 正确配置停止token
+        stop_token_ids = [tokenizer.eos_token_id]
+        
+        # 添加 <|im_end|> 和 <|im_start|> 作为停止token
+        im_end_id = tokenizer.convert_tokens_to_ids("<|im_end|>")
+        im_start_id = tokenizer.convert_tokens_to_ids("<|im_start|>")
+        
+        if im_end_id is not None and im_end_id != tokenizer.unk_token_id:
+            stop_token_ids.append(im_end_id)
+            print(f"[DEBUG] Added <|im_end|> as stop token (id={im_end_id})")
+        
+        if im_start_id is not None and im_start_id != tokenizer.unk_token_id:
+            stop_token_ids.append(im_start_id)
+            print(f"[DEBUG] Added <|im_start|> as stop token (id={im_start_id})")
+        
+        print(f"[DEBUG] Stop token IDs: {stop_token_ids}")
 
         with torch.no_grad():
             output_ids = model.generate(
@@ -280,12 +297,8 @@ def main() -> None:
                 temperature=args.temperature,
                 top_p=args.top_p,
                 repetition_penalty=args.repetition_penalty,
-                pad_token_id=tokenizer.pad_token_id,  # 🔑 使用正确的 pad_token
-                # Stop tokens to prevent unwanted continuation
-                eos_token_id=[
-                    tokenizer.eos_token_id,
-                    tokenizer.convert_tokens_to_ids("<|im_end|>"),
-                ],
+                pad_token_id=tokenizer.pad_token_id,
+                eos_token_id=stop_token_ids,  # 使用配置好的停止token列表
             )
 
         completion = tokenizer.decode(output_ids[0], skip_special_tokens=False)
@@ -316,13 +329,12 @@ def main() -> None:
         print(assistant_reply[:500] if len(assistant_reply) > 500 else assistant_reply)
         print("=" * 80)
         
-        # �🔑 清理输出：移除可能的 prompt 泄露和无关内容
-        # 1. 截断于章节标题、提示语等
+        # 🔑 清理输出：移除可能的 prompt 泄露和无关内容
+        # 1. 截断于明确的系统提示语（不包括会误伤的"第"、"章"等）
         stop_markers = [
             "\n任务：", "\n要求：", "\n原文：", 
-            "\n请直接输出", "\n请在不", "\n禁止",
-            "\n请继续阅读", "\n第", "章",  # 章节标题
-            "aalborg",  # 训练数据污染
+            "\n请直接输出", "\n请将以下", "\n禁止",
+            "\n原始文本", "\n现代白话",
             "\nuser\n", "\nUser\n", 
             "\nsystem\n", "\nSystem\n",
             "\nassistant\n", "\nAssistant\n",
@@ -333,9 +345,15 @@ def main() -> None:
             if marker in assistant_reply:
                 pos = assistant_reply.find(marker)
                 assistant_reply = assistant_reply[:pos]
+                print(f"[DEBUG] Truncated at marker: {repr(marker)}")
                 break
         
-        # 2. 去除结尾的不完整句子（如果以标点结束则保留）
+        # 2. 检测异常重复模式（连续相同字符超过50个）
+        import re
+        if re.search(r'(.)\\1{50,}', assistant_reply):
+            print("[WARNING] Detected abnormal repetition pattern!")
+        
+        # 3. 去除结尾的不完整句子
         assistant_reply = assistant_reply.strip()
         
         print("===== Assistant Reply =====")
