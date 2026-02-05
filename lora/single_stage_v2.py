@@ -138,6 +138,84 @@ class LossRecorderCallback(TrainerCallback):
                     print(f"[step {state.global_step}] eval_loss = {logs['eval_loss']:.4f}")
 
 
+class TestGenerationCallback(TrainerCallback):
+    """每N步生成测试样本，供人工评估改写效果"""
+    
+    def __init__(self, model, tokenizer, test_prompts, test_interval=100, output_dir="."):
+        self.model = model
+        self.tokenizer = tokenizer
+        self.test_prompts = test_prompts
+        self.test_interval = test_interval
+        self.output_dir = Path(output_dir)
+        self.output_dir.mkdir(exist_ok=True, parents=True)
+    
+    def on_step_end(self, args, state, control, **kwargs):
+        # 每test_interval步运行一次测试
+        if state.global_step % self.test_interval == 0 and state.global_step > 0:
+            self._run_test_generation(state.global_step)
+    
+    def _run_test_generation(self, step):
+        """运行测试生成"""
+        print(f"\n{'='*80}")
+        print(f"🧪 [Step {step}] 运行测试生成 - 人工评估改写效果")
+        print(f"{'='*80}")
+        
+        self.model.eval()
+        test_results = []
+        
+        with torch.no_grad():
+            for i, prompt in enumerate(self.test_prompts):
+                print(f"\n--- 测试样本 {i+1}/{len(self.test_prompts)} ---")
+                print(f"原文: {prompt[:100]}...")
+                
+                # 构建输入
+                messages = [
+                    {"role": "user", "content": f"请将下面的文言文改写为现代白话文：\n\n{prompt}"}
+                ]
+                input_text = "\n".join([
+                    f"<|im_start|>{msg['role']}\n{msg['content']}<|im_end|>"
+                    for msg in messages
+                ]) + "\n<|im_start|>assistant\n"
+                
+                input_ids = self.tokenizer(input_text, return_tensors="pt").input_ids.to(self.model.device)
+                
+                # 生成
+                output_ids = self.model.generate(
+                    input_ids,
+                    max_new_tokens=512,
+                    temperature=0.7,
+                    top_p=0.9,
+                    do_sample=True,
+                    pad_token_id=self.tokenizer.pad_token_id,
+                    eos_token_id=self.tokenizer.eos_token_id,
+                )
+                
+                # 解码输出
+                generated_text = self.tokenizer.decode(
+                    output_ids[0][input_ids.shape[1]:],
+                    skip_special_tokens=True
+                ).strip()
+                
+                print(f"改写: {generated_text[:200]}...")
+                
+                test_results.append({
+                    "step": step,
+                    "sample_id": i + 1,
+                    "original": prompt,
+                    "rewritten": generated_text
+                })
+        
+        # 保存测试结果到JSON文件
+        test_file = self.output_dir / f"test_generation_step_{step}.json"
+        with open(test_file, 'w', encoding='utf-8') as f:
+            json.dump(test_results, f, indent=2, ensure_ascii=False)
+        
+        print(f"\n✓ 测试结果已保存到: {test_file}")
+        print(f"{'='*80}\n")
+        
+        self.model.train()
+
+
 def main():
     if torch.cuda.is_available():
         torch.cuda.empty_cache()
@@ -255,7 +333,7 @@ def main():
         print(f"✓ 验证集格式化完成: {len(formatted_eval_dataset)} 条有效样本")
     
     # 训练参数
-    eval_steps = config.get("eval_steps", config.get("logging_steps", 10))  # 默认与logging_steps相同
+    eval_steps = config.get("eval_steps", 100)  # 默认每100步评估
     training_args = TrainingArguments(
         output_dir=output_dir,
         num_train_epochs=config.get("num_train_epochs", 2.0),
@@ -269,8 +347,8 @@ def main():
         eval_strategy="steps" if formatted_eval_dataset else "no",
         eval_steps=eval_steps if formatted_eval_dataset else None,
         save_strategy="steps",
-        save_steps=config.get("save_steps", 200),
-        save_total_limit=3,
+        save_steps=config.get("save_steps", 100),  # 每100步保存checkpoint
+        save_total_limit=config.get("save_total_limit", 5),  # 保留最近5个checkpoint
         load_best_model_at_end=True if formatted_eval_dataset else False,
         metric_for_best_model="eval_loss" if formatted_eval_dataset else None,
         bf16=True,
@@ -279,8 +357,22 @@ def main():
         report_to="none",
     )
     
+    # 准备测试样本（用于人工评估）
+    test_prompts = config.get("test_prompts", [
+        "话说天下大势，分久必合，合久必分。",
+        "却说玄德引军前进，忽报前面有一军阻路。",
+        "且说曹操引兵至赤壁，与周瑜相拒。",
+    ])
+    
     # 回调
     loss_recorder = LossRecorderCallback()
+    test_callback = TestGenerationCallback(
+        model=model,
+        tokenizer=tokenizer,
+        test_prompts=test_prompts,
+        test_interval=config.get("test_interval", 100),  # 每100步测试
+        output_dir=output_dir
+    )
     
     # Trainer
     trainer = Trainer(
@@ -288,7 +380,7 @@ def main():
         args=training_args,
         train_dataset=formatted_dataset,
         eval_dataset=formatted_eval_dataset,
-        callbacks=[loss_recorder],
+        callbacks=[loss_recorder, test_callback],
     )
     
     # 训练
