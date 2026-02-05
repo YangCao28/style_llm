@@ -3,6 +3,7 @@
   "dataset_path": "data/split/train_8000.jsonl",
   "validation_dataset_path": "data/split/test_1000.jsonl",
   "output_dir": "single_stage_v2",
+  "resume_from_checkpoint": "single_stage_v2/checkpoint-200",
   
   "lora_r": 64,
   "lora_alpha": 128,
@@ -17,7 +18,7 @@
   "lr_scheduler_type": "cosine",
   "warmup_ratio": 0.1,
   "logging_steps": 10,
-  "save_steps": 200,
+  "save_steps": 150,
   "max_seq_length": 2048
 }
 

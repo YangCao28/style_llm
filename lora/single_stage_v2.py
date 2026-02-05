@@ -146,6 +146,7 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--config", type=Path, required=True, help="Path to JSON config file")
     parser.add_argument("--soft_mask_ratio", type=float, default=None, help="Override soft masking ratio")
+    parser.add_argument("--resume_from_checkpoint", type=str, default=None, help="Resume from checkpoint path")
     args = parser.parse_args()
 
     # 加载配置
@@ -291,7 +292,10 @@ def main():
     )
     
     # 训练
+    resume_checkpoint = args.resume_from_checkpoint or config.get("resume_from_checkpoint")
     print(f"\n🚀 开始训练...")
+    if resume_checkpoint:
+        print(f"  📂 从checkpoint恢复: {resume_checkpoint}")
     print(f"  {'='*80}")
     print(f"  🎯 关键配置:")
     print(f"     - Soft Masking: {soft_mask_ratio:.1%} 样本全量学习")
@@ -299,7 +303,7 @@ def main():
     print(f"     - Learning Rate: {config.get('learning_rate', 4e-5)} (温和以配合Soft Masking)")
     print(f"  {'='*80}\n")
     
-    trainer.train()
+    trainer.train(resume_from_checkpoint=resume_checkpoint)
     
     # 保存
     print(f"\n💾 保存模型...")
